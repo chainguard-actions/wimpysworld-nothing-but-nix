@@ -8,6 +8,7 @@ Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at
 
 | Version | Tag | Upstream commit |
 |---------|-----|-----------------|
+| v10 | [`v10`](https://github.com/chainguard-actions/wimpysworld-nothing-but-nix/tree/v10) | [`687c797`](https://github.com/wimpysworld/nothing-but-nix/commit/687c797a730352432950c707ab493fcc951818d7) |
 | v7 | [`v7`](https://github.com/chainguard-actions/wimpysworld-nothing-but-nix/tree/v7) | [`a77b09e`](https://github.com/wimpysworld/nothing-but-nix/commit/a77b09ee91691223ff188d8fb6a87d699d457b4f) |
 
 ## Privacy
