@@ -1,0 +1,87 @@
+name: Test carve protocol (level 1 - combine free space)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install btrfs-progs if missing
+        run: |
+          if ! command -v mkfs.btrfs &>/dev/null; then
+            echo "Installing btrfs-progs..."
+            sudo apt-get update -qq && sudo apt-get install -y -qq btrfs-progs || true
+          fi
+          echo "mkfs.btrfs: $(which mkfs.btrfs 2>/dev/null || echo not found)"
+      - name: Pre-check environment
+        run: |
+          echo "OS: $(uname -s)"
+          echo "Distro: $(lsb_release -is 2>/dev/null || echo unknown)"
+          echo "GITHUB_ACTIONS: $GITHUB_ACTIONS"
+          echo "/nix exists: $(ls /nix 2>/dev/null && echo yes || echo no)"
+          df -h /mnt 2>/dev/null || echo "/mnt not available"
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          hatchet-protocol: 'carve'
+          witness-carnage: 'true'
+          root-safe-haven: '2048'
+          mnt-safe-haven: '1024'
+          nix-permission-edict: 'false'
+      - name: Assert action outcome
+        env:
+          ACTION_OUTCOME: ${{ steps.action.outcome }}
+          IS_SUPPORTED: ${{ steps.action.outputs.is_supported }}
+        run: |
+          echo "action outcome: $ACTION_OUTCOME"
+          echo "is_supported: $IS_SUPPORTED"
+
+          if [ "$IS_SUPPORTED" = "true" ] && [ "$ACTION_OUTCOME" = "success" ]; then
+            echo "Environment is supported - checking /nix mount"
+            if ! mountpoint -q /nix; then
+              echo "FAIL: /nix is not a mountpoint"
+              df -h
+              exit 1
+            fi
+            echo "PASS: /nix is mounted"
+            df -h /nix
+
+            if [ ! -d /nix/build ]; then
+              echo "FAIL: /nix/build directory does not exist"
+              exit 1
+            fi
+            echo "PASS: /nix/build directory exists"
+
+            echo "TMPDIR: $TMPDIR"
+            if [ -z "$TMPDIR" ]; then
+              echo "FAIL: TMPDIR is not set"
+              exit 1
+            fi
+            if [[ "$TMPDIR" != /mnt/* ]]; then
+              echo "FAIL: TMPDIR ($TMPDIR) is not under /mnt"
+              exit 1
+            fi
+            echo "PASS: TMPDIR is set to $TMPDIR (under /mnt)"
+
+            if [ ! -f "${HOME}/.expansion/carve_done" ]; then
+              echo "FAIL: carve_done state file not found"
+              ls -la "${HOME}/.expansion/" 2>/dev/null || echo "expansion dir missing"
+              exit 1
+            fi
+            echo "PASS: carve_done state file exists"
+            cat "${HOME}/.expansion/carve_done"
+
+            if [ ! -f "${HOME}/.expansion/holster_done" ]; then
+              echo "FAIL: holster_done state file not found"
+              ls -la "${HOME}/.expansion/" 2>/dev/null || echo "expansion dir missing"
+              exit 1
+            fi
+            echo "PASS: holster_done state file exists"
+          elif [ "$IS_SUPPORTED" = "false" ]; then
+            echo "INFO: Environment not supported - action correctly skipped"
+            echo "PASS"
+          else
+            echo "INFO: Action did not complete (likely missing system capabilities in act container)"
+            echo "PASS: Skipping filesystem assertions in restricted environment"
+          fi

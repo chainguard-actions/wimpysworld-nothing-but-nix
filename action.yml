@@ -1,0 +1,238 @@
+name: 'Nothing but Nix'
+description: "Removes all the cruft \U0001FA93 from a GitHub Actions runner to make the most space possible for Nix ️❄️"
+branding:
+  icon: 'trash-2'
+  color: 'red'
+inputs:
+  hatchet-protocol:
+    description: 'Level of file purging (Holster: none, Cleave: standard, Rampage: aggressive)'
+    required: false
+    default: 'cleave'
+  witness-carnage:
+    description: 'Display purge progress in real-time instead of running in background'
+    required: false
+    default: 'false'
+  root-safe-haven:
+    description: 'Space in MB to mercifully spare on the / filesystem (default: 2048)'
+    required: false
+    default: '2048'
+  mnt-safe-haven:
+    description: 'Space in MB to mercifully spare on the /mnt filesystem (default: 1024)'
+    required: false
+    default: '1024'
+  nix-permission-edict:
+    description: 'Grant user ownership of /nix directory (default: false). Useful for Nix installers that require user-writable /nix.'
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
+    - name: The Checks
+      id: environment-check
+      shell: bash
+      env:
+        RUNNER_OS: ${{ runner.os }}
+      run: |
+        # Check for macOS/Darwin - warn but don't fail
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          echo "is_supported=false" >> $GITHUB_OUTPUT
+          echo "⚠️  Nothing but Nix is designed for Ubuntu runners only."
+          echo "ℹ️  macOS/Darwin runners do not require this action - they already provide sufficient space for Nix."
+          echo "ℹ️  This action will be skipped and your workflow will continue normally."
+          exit 0
+        fi
+
+        # Check for Windows - warn but don't fail
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          echo "is_supported=false" >> $GITHUB_OUTPUT
+          echo "⚠️  Nothing but Nix is designed for Ubuntu runners only."
+          echo "ℹ️  Windows runners do not require this action - they have different filesystem layouts and constraints."
+          echo "ℹ️  This action will be skipped and your workflow will continue normally."
+          exit 0
+        fi
+
+        # Check for Ubuntu on Linux runners
+        if [[ "$RUNNER_OS" == "Linux" ]]; then
+          if [ "$(lsb_release -is)" != "Ubuntu" ]; then
+            echo "is_supported=false" >> $GITHUB_OUTPUT
+            echo "❌ This action only works on Ubuntu runners"
+            exit 1
+          else
+            echo "is_supported=true" >> $GITHUB_OUTPUT
+          fi
+        fi
+
+        # Check for GitHub Actions environment
+        if [ -z "$GITHUB_ACTIONS" ]; then
+          echo "is_supported=false" >> $GITHUB_OUTPUT
+          echo "❌ This action only works on GitHub Actions runners"
+          exit 1
+        fi
+
+        # Check that Nix is not already installed
+        if [ -d /nix ]; then
+          echo "is_supported=false" >> $GITHUB_OUTPUT
+          echo "❌ This action must be run before Nix is installed"
+          exit 1
+        else
+          echo "is_supported=true" >> $GITHUB_OUTPUT
+        fi
+    - name: The Hatchet Protocol
+      id: set-hatchet-protocol
+      if: steps.environment-check.outputs.is_supported == 'true'
+      shell: bash
+      env:
+        INPUT_HATCHET_PROTOCOL: ${{ inputs.hatchet-protocol }}
+      run: "input_protocol=\"$INPUT_HATCHET_PROTOCOL\"\n# Convert to lowercase for case-insensitive comparison\ninput_protocol=\"$(tr '[:upper:]' '[:lower:]' <<< \"$input_protocol\")\"\n\ncase \"$input_protocol\" in\n  \"holster\")\n    echo \"\U0001FA93 Hatchet Protocol: Holster - Keep the hatchet sheathed, use space from /mnt (Level 0)\"\n    protocol_level=0;;\n  \"carve\")\n    echo \"\U0001FA93 Hatchet Protocol: Carve - Craft and combine free space from / and /mnt (Level 1)\"\n    protocol_level=1;;\n  \"cleave\")\n    echo \"\U0001FA93 Hatchet Protocol: Cleave - Make powerful, decisive cuts to large packages (Level 2)\"\n    protocol_level=2;;\n  \"rampage\")\n    echo \"\U0001FA93 Hatchet Protocol: Rampage - Relentless, brutal elimination of all bloat (Level 3)\"\n    protocol_level=3;;\n  *)\n    echo \"\U0001FA93 Hatchet Protocol: Cleave - Make powerful, decisive cuts to large packages (Level 2)\"\n    protocol_level=2;;\nesac\n\necho \"level=${protocol_level}\" >> $GITHUB_OUTPUT\n"
+    - name: The Setup
+      if: steps.environment-check.outputs.is_supported == 'true' && steps.set-hatchet-protocol.outputs.level > 1
+      shell: bash
+      run: |
+        ARCH=$(uname -m)
+        if [[ "$ARCH" == "x86_64" ]]; then
+          URL_ARCH="x86_64"
+        elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
+          URL_ARCH="aarch64"
+        else
+          echo "Unsupported architecture: $ARCH"
+          exit 1
+        fi
+
+        OS=$(uname -s)
+        if [[ "$OS" == "Linux" ]]; then
+          URL_OS="unknown-linux-gnu"
+        elif [[ "$OS" == "Darwin" ]]; then
+          URL_OS="apple-darwin"
+        else
+          echo "Unsupported OS: $OS"
+          exit 1
+        fi
+
+        DOWNLOAD_URL="https://github.com/SUPERCILEX/fuc/releases/download/3.0.1/${URL_ARCH}-${URL_OS}-rmz"
+        curl -L -o rmz "$DOWNLOAD_URL"
+        chmod +x rmz
+        sudo mv rmz /usr/bin/rmz
+        rmz --version
+    - name: The Volume
+      if: steps.environment-check.outputs.is_supported == 'true'
+      shell: bash
+      env:
+        INPUT_MNT_SAFE_HAVEN: ${{ inputs.mnt-safe-haven }}
+        INPUT_NIX_PERMISSION_EDICT: ${{ inputs.nix-permission-edict }}
+      run: |
+        free_space=$(df -m --output=avail /mnt | tail -n 1 | tr -d ' ')
+        echo "Initial free space of /mnt: ${free_space}MB"
+
+        # Minimum usable space: safe haven + 1024MB for a useful initial volume
+        min_required=$(("$INPUT_MNT_SAFE_HAVEN" + 1024))
+        if [ "${free_space}" -lt "${min_required}" ]; then
+          echo "❌ Insufficient free space on /mnt to create initial volume."
+          echo "   Available: ${free_space}MB, Required: at least ${min_required}MB"
+          echo "   Contents of /mnt:"
+          sudo ls -lah /mnt
+          echo "   This may indicate leftover data from a previous job on this runner."
+          echo "   Try re-running the workflow to get a different runner."
+          exit 1
+        fi
+
+        loop_dev=$(sudo losetup --find)
+        loop_num=${loop_dev##*/loop}
+
+        if sudo fallocate -l $((free_space - "$INPUT_MNT_SAFE_HAVEN"))M "/mnt/disk${loop_num}.img"; then
+          sudo losetup ${loop_dev} "/mnt/disk${loop_num}.img"
+        else
+          echo "❌ Failed to allocate disk image on /mnt"
+          exit 1
+        fi
+
+        # Create filesystem
+        sudo mkfs.btrfs -L nix -d raid0 -m raid0 --nodiscard "${loop_dev}"
+        sudo btrfs device scan
+        sudo btrfs filesystem show
+
+        # Mount filesystem
+        sudo mkdir -p /nix
+        sudo mount LABEL=nix /nix -o noatime,nobarrier,nodiscard,compress=zstd:1,space_cache=v2,commit=120
+        sudo df -h
+
+        # Create /nix/build for Nix's build-dir setting
+        sudo mkdir -p /nix/build
+
+        if [[ "$INPUT_NIX_PERMISSION_EDICT" == "true" ]]; then
+          echo "Applying Nix Permission Edict: Granting user ownership of /nix"
+          sudo chown -R "$(id --user)":"$(id --group)" /nix
+        fi
+
+        # Create TMPDIR on /mnt for Nix installer compatibility
+        TMPNIX="$(sudo mktemp --directory --tmpdir=/mnt)"
+        sudo chmod 1777 "${TMPNIX}"
+        echo "TMPDIR=${TMPNIX}" >> $GITHUB_ENV
+
+        # Create a directory to store expansion state
+        mkdir -p "${HOME}/.expansion"
+        echo "Initial volume created" | tee "${HOME}/.expansion/holster_done"
+    - name: The Local
+      if: steps.environment-check.outputs.is_supported == 'true' && steps.set-hatchet-protocol.outputs.level >= 2
+      shell: bash
+      run: |
+        # Nix is often installed in /usr/local, so we need to ensure that it is purged early
+        sudo rmz -f /usr/local
+        sudo mkdir -p /usr/local/{bin,doc,include,lib,man,sbin,share,src} || true
+    - name: The Purge
+      if: steps.environment-check.outputs.is_supported == 'true'
+      shell: bash
+      env:
+        INPUT_PROTOCOL_LEVEL: ${{ steps.set-hatchet-protocol.outputs.level }}
+        INPUT_ROOT_SAFE_HAVEN: ${{ inputs.root-safe-haven }}
+        INPUT_WITNESS_CARNAGE: ${{ inputs.witness-carnage }}
+      run: "cat > /tmp/expand_nix_volume.sh << 'EOF'\n#!/usr/bin/env bash\nset -e\n\nprotocol_level=\"$INPUT_PROTOCOL_LEVEL\"\nexpansion_dir=\"${HOME}/.expansion\"\nroot_safe_haven=\"$INPUT_ROOT_SAFE_HAVEN\"\n\nfunction add_expansion_disk() {\n  # Check for additional free space after purging\n  free_space=$(df -m --output=avail / | tail -n 1 | tr -d ' ')\n  echo \"Free space of / after purge: ${free_space}MB\"\n\n  # Create additional disk if suitable free space exists\n  if [ $free_space -gt $((root_safe_haven + 2048)) ]; then\n    # Calculate the size of the expansion disk, reserving the safe haven\n    disk_size=$((free_space - root_safe_haven))\n    echo \"Creating expansion disk of ${disk_size}MB in /\"\n    # Create expansion disk image\n    loop_dev=$(sudo losetup --find)\n    loop_num=${loop_dev##*/loop}\n    if sudo fallocate -l ${disk_size}M \"/disk${loop_num}.img\"; then\n      sudo losetup ${loop_dev} \"/disk${loop_num}.img\"\n\n      # Add the new device to the pool\n      sudo btrfs device add --nodiscard ${loop_dev} /nix\n      echo \"Added expansion disk \"/disk${loop_num}.img\" (${loop_dev}, ${disk_size}MB) to /nix pool\" > $expansion_dir/expansion_done\n\n      # Balance the filesystem to use the new space\n      sudo btrfs balance start -dusage=50 /nix\n      sudo btrfs filesystem show\n    fi\n  fi\n}\n\n# If carve is selected, claim space from / now\nif [[ \"$protocol_level\" -eq 1 ]]; then\n  echo \"Disk space has been carved out\" > $expansion_dir/carve_done\n  add_expansion_disk\nfi\n\n# Cleanse docker\nif [[ \"$protocol_level\" -ge 2 ]]; then\n  for CRUFT in $(docker image ls --format '{{.ID}}'); do\n    docker rmi --force \"${CRUFT}\" || true\n  done\n  docker system prune --all --force\n  sudo apt-get -y remove --purge '^docker.*'\n  sudo rmz -f /usr/bin/docker* /var/lib/docker\n  echo \"Cleanse docker complete\" > $expansion_dir/docker_done\nfi\n\n# Cleanse snap\nif [[ \"$protocol_level\" -ge 2 ]]; then\n  sudo apt-get -y remove --purge snapd\n  sudo rmz -f \\\n    /snap \\\n    /usr/lib/snapd \\\n    /var/snap \\\n    /var/lib/snapd \\\n    \"${HOME}/snap\"\n  echo \"Cleanse snap complete\" > $expansion_dir/snap_done\nfi\n\n# Cleanse apt\nif [[ \"$protocol_level\" -ge 2 ]]; then\n  sudo tee /etc/dpkg/dpkg.cfg.d/01_nocruft > /dev/null << 'APTCFG'\npath-exclude /usr/share/doc/*\npath-exclude /usr/share/fonts/*\npath-exclude /usr/share/icons/*\npath-exclude /usr/share/info/*\npath-exclude /usr/share/man/*\nAPTCFG\n\n  if [[ \"$protocol_level\" -ge 3 ]]; then\n    sudo apt-get -y remove --purge \\\n      '^apache2.*' \\\n      '^aspnetcore-.*' \\\n      azure-cli \\\n      buildah \\\n      '^byobu.*' \\\n      '^clang-.*' \\\n      containerd.io \\\n      containernetworking-plugins \\\n      '^dotnet-.*' \\\n      firefox \\\n      '^fonts-.*' \\\n      fwupd \\\n      '^gfortran-.*' \\\n      '^google-.*' \\\n      '^gradle.*' \\\n      '^java.*' \\\n      '^kotlin.*' \\\n      kubectl \\\n      '^libclang-.*' \\\n      libgl1-mesa-dri \\\n      '^libgirepository-.*' \\\n      '^libgtk-.*' \\\n      '^libllvm-.*' \\\n      '^libx265-.*' \\\n      '^llvm-.*' \\\n      man-db \\\n      '^mecab.*' \\\n      mediainfo \\\n      '^mercurial.*' \\\n      microsoft-edge-stable \\\n      '^mongodb-.*' \\\n      '^mono-.*' \\\n      '^mssql-.*' \\\n      '^mysql-.*' \\\n      '^nginx-.*' \\\n      '^php.*' \\\n      '^podman.*' \\\n      '^powershell.*' \\\n      '^postgres.*' \\\n      python-babel-localedata \\\n      '^python3-babel.*' \\\n      '^python3-boto.*' \\\n      '^ruby.*' \\\n      '^r-base.*' \\\n      skopeo \\\n      tcl \\\n      tk \\\n      '^tex-.*' \\\n      '^vim.*'\n  fi\n\n  sudo apt-get -y autoremove --purge\n  sudo apt-get -y clean\n  echo \"Cleanse apt complete\" > $expansion_dir/apt_done\nfi\n\n# Cleave\nif [[ \"$protocol_level\" -ge 2 ]]; then\n  sudo rmz -f \\\n    \"${HOME}/.rustup\" \\\n    \"${HOME}/.cargo\" \\\n    \"${HOME}/.dotnet\" \\\n    /opt/containerd \\\n    /opt/hostedtoolcache \\\n    /opt/microsoft \\\n    /opt/az \\\n    /opt/pipx* \\\n    /opt/google \\\n    /opt/mssql-tools\n  echo \"Cleave complete\" > $expansion_dir/cleave_done\nfi\n\n# Rampage\nif [[ \"$protocol_level\" -ge 3 ]]; then\n  sudo rmz -f \\\n    /usr/bin/kotlin* \\\n    /usr/lib/heroku \\\n    /usr/share/apache-* \\\n    /usr/share/az_* \\\n    /usr/share/doc/* \\\n    /usr/share/fonts/* \\\n    /usr/share/gradle-* \\\n    /usr/share/icons/* \\\n    /usr/share/info/* \\\n    /usr/share/kotlinc \\\n    /usr/share/java \\\n    /usr/share/man/* \\\n    /usr/share/miniconda \\\n    /usr/share/sbt \\\n    /usr/share/swift \\\n    /usr/share/tcltk \\\n    /usr/share/texinfo \\\n    /var/lib/containerd \\\n    /var/lib/gems \\\n    /var/lib/mysql \\\n    /var/lib/ubuntu-advantage\n  echo \"Rampage complete\" > $expansion_dir/rampage_done\nfi\n\n# Claim the space from / for purging\nif [[ \"$protocol_level\" -ge 2 ]]; then\n  echo \"The Purge Is Complete!\" > $expansion_dir/purge_done\n  add_expansion_disk\nfi\n\necho \"Everything completed\" > $expansion_dir/all_done\nEOF\n\n# Make script executable\nchmod +x /tmp/expand_nix_volume.sh\n# Execute based on witness-carnage setting\nif [ \"$INPUT_WITNESS_CARNAGE\" == \"true\" ]; then\n  echo \"\U0001F62E Displaying the carnage in real-time. This will block until completion.\"\n  /tmp/expand_nix_volume.sh | tee ${HOME}/.expansion/expansion.log\nelse\n  /tmp/expand_nix_volume.sh > ${HOME}/.expansion/expansion.log 2>&1 &\n  echo \"\U0001F4C8 Background space expansion started. /nix will grow as space becomes available.\"\nfi\n"
+    - name: The Post
+      if: runner.os == 'Linux'
+      uses: srz-zumix/post-run-action@42756f7452b9439d0365b7e087b2c364f54209c6 # v3
+      with:
+        shell: bash -e {0}
+        post-run: |
+          ls -ltr ${HOME}/.expansion/*_done || true
+          all_disks=()
+
+          # Check for disks in /mnt directory
+          mnt_disks=(/mnt/disk*.img)
+          if [[ -e "${mnt_disks[0]}" ]]; then
+            all_disks+=("${mnt_disks[@]}")
+          fi
+
+          # Check for disks in / directory
+          root_disks=(/disk*.img)
+          if [[ -e "${root_disks[0]}" ]]; then
+            all_disks+=("${root_disks[@]}")
+          fi
+
+          echo "Found ${#all_disks[@]} disk image(s):"
+          for disk in "${all_disks[@]}"; do
+            echo "- $disk ($(du -h "$disk" | cut -f1))"
+          done
+          echo "Space used by TMPDIR (${TMPDIR}):"
+          sudo du -csh "${TMPDIR}" 2>/dev/null || echo "TMPDIR not found or empty"
+          echo "Space used by disk images:"
+          sudo df -h
+          echo "Check which device(s) btrfs is using:"
+          sudo btrfs filesystem show /nix
+          echo "See actual allocation per device:"
+          sudo btrfs device stats /nix
