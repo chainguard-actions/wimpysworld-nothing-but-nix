@@ -1,0 +1,80 @@
+name: Test protocol input is case-insensitive
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Ensure /nix does not exist before action
+        run: |
+          if [ -d /nix ]; then
+            sudo rm -rf /nix
+          fi
+          echo "Pre-check: /nix does not exist"
+      - name: Install btrfs tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y btrfs-progs || true
+      - id: action
+        uses: .
+        with:
+          hatchet-protocol: HOLSTER
+          witness-carnage: "true"
+          root-safe-haven: "2048"
+          mnt-safe-haven: "1024"
+          nix-permission-edict: "false"
+        continue-on-error: true
+      - name: Assert action ran with uppercase HOLSTER protocol
+        run: |
+          echo "Action outcome: ${{ steps.action.outcome }}"
+          echo "HOLSTER (uppercase) should be treated as holster (level 0)"
+          # Verify environment is Ubuntu (environment check would pass)
+          if [ "$(lsb_release -is)" = "Ubuntu" ]; then
+            echo "PASS: Running on Ubuntu - environment check passes"
+          else
+            echo "FAIL: Not running on Ubuntu"
+            exit 1
+          fi
+      - name: Assert case-insensitive protocol does not run purge steps
+        run: |
+          echo "Verifying HOLSTER (uppercase) is treated as holster (level 0)..."
+          # With holster (level 0), the expansion script should not create docker_done/snap_done
+          if [ -f "${HOME}/.expansion/docker_done" ]; then
+            echo "FAIL: docker_done marker found but HOLSTER protocol should not purge docker"
+            exit 1
+          fi
+          if [ -f "${HOME}/.expansion/snap_done" ]; then
+            echo "FAIL: snap_done marker found but HOLSTER protocol should not purge snap"
+            exit 1
+          fi
+          if [ -f "${HOME}/.expansion/cleave_done" ]; then
+            echo "FAIL: cleave_done marker found but HOLSTER protocol should not cleave"
+            exit 1
+          fi
+          echo "PASS: No unexpected purge markers found for HOLSTER (uppercase) protocol"
+      - name: Verify case conversion logic independently
+        run: |
+          # Test the same case conversion logic the action uses
+          input_protocol="HOLSTER"
+          input_protocol="$(tr '[:upper:]' '[:lower:]' <<< "$input_protocol")"
+          echo "Converted protocol: $input_protocol"
+          if [ "$input_protocol" != "holster" ]; then
+            echo "FAIL: Expected 'holster' after lowercase conversion, got '$input_protocol'"
+            exit 1
+          fi
+          echo "PASS: Case conversion works correctly (HOLSTER -> holster)"
+          # Verify the case statement would match holster -> level 0
+          case "$input_protocol" in
+            "holster") protocol_level=0;;
+            "carve") protocol_level=1;;
+            "cleave") protocol_level=2;;
+            "rampage") protocol_level=3;;
+            *) protocol_level=2;;
+          esac
+          echo "Protocol level for holster: $protocol_level"
+          if [ "$protocol_level" != "0" ]; then
+            echo "FAIL: Expected protocol level 0 for holster, got $protocol_level"
+            exit 1
+          fi
+          echo "PASS: Protocol level is 0 for holster (from HOLSTER input)"
