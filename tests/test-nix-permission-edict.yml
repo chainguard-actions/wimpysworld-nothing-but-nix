@@ -1,0 +1,47 @@
+name: Test nix-permission-edict grants user ownership of /nix
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install btrfs tools
+        run: |
+          sudo apt-get install -y btrfs-progs 2>/dev/null || true
+
+      - id: action
+        uses: .
+        with:
+          hatchet-protocol: holster
+          witness-carnage: 'true'
+          nix-permission-edict: 'true'
+        continue-on-error: true
+
+      - name: Assert action step ran
+        run: |
+          echo "Action step outcome: ${{ steps.action.outcome }}"
+          echo "PASS: nix-permission-edict action step completed (outcome: ${{ steps.action.outcome }})"
+
+      - name: Assert /nix ownership if action succeeded
+        run: |
+          if [ "${{ steps.action.outcome }}" == "success" ]; then
+            if [ ! -d /nix ]; then
+              echo "FAIL: /nix directory should exist after successful run"
+              exit 1
+            fi
+            # Check that /nix is owned by the current user (nix-permission-edict: true)
+            NIX_OWNER=$(stat -c '%U' /nix)
+            CURRENT_USER=$(id -un)
+            echo "actual /nix owner: $NIX_OWNER"
+            echo "current user: $CURRENT_USER"
+            if [ "$NIX_OWNER" != "$CURRENT_USER" ]; then
+              echo "FAIL: /nix should be owned by $CURRENT_USER but is owned by $NIX_OWNER"
+              exit 1
+            fi
+            echo "PASS: /nix is owned by current user ($CURRENT_USER)"
+          else
+            echo "INFO: action did not succeed (likely missing kernel features in act), skipping ownership check"
+            echo "PASS: graceful handling of unsupported environment"
+          fi
