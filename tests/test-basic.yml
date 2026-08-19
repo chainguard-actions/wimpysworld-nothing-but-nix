@@ -1,4 +1,4 @@
-name: Test holster protocol (no purging)
+name: Test basic usage (cleave protocol)
 on:
   workflow_dispatch:
 jobs:
@@ -24,16 +24,25 @@ jobs:
           cp "$GITHUB_WORKSPACE/tests/fixtures/mock-sudo.sh" "$HOME/bin/sudo"
           chmod +x "$HOME/bin/sudo"
 
+          # Install mock curl to avoid network dependency for rmz binary download
+          cp "$GITHUB_WORKSPACE/tests/fixtures/mock-curl.sh" "$HOME/bin/curl"
+          chmod +x "$HOME/bin/curl"
+
+          # Install mock docker to avoid failures when docker is not available
+          cp "$GITHUB_WORKSPACE/tests/fixtures/mock-docker.sh" "$HOME/bin/docker"
+          chmod +x "$HOME/bin/docker"
+
           # Ensure /mnt exists and is writable (may not exist in Docker containers)
           mkdir -p /mnt 2>/dev/null || sudo mkdir -p /mnt 2>/dev/null || true
           chmod 1777 /mnt 2>/dev/null || sudo chmod 1777 /mnt 2>/dev/null || true
 
           echo "Mock commands installed in $HOME/bin"
-      - name: Run Nothing but Nix with holster protocol
+          echo "PATH will be: $HOME/bin:$PATH"
+      - name: Run Nothing but Nix with defaults (cleave)
         id: action
         uses: .
         with:
-          hatchet-protocol: holster
+          hatchet-protocol: cleave
           witness-carnage: 'false'
       - name: Assert /nix directory exists
         run: |
@@ -51,6 +60,26 @@ jobs:
             exit 1
           fi
           echo "PASS: /nix/build directory exists"
+      - name: Assert TMPDIR is set on /mnt
+        run: |
+          echo "TMPDIR: $TMPDIR"
+          if [ -z "$TMPDIR" ]; then
+            echo "FAIL: TMPDIR is not set"
+            exit 1
+          fi
+          if [[ "$TMPDIR" != /mnt/* ]]; then
+            echo "FAIL: TMPDIR ($TMPDIR) is not under /mnt"
+            exit 1
+          fi
+          echo "PASS: TMPDIR is set to $TMPDIR"
+      - name: Assert expansion state directory exists
+        run: |
+          echo "Checking expansion state directory..."
+          if [ ! -d "${HOME}/.expansion" ]; then
+            echo "FAIL: expansion state directory not created"
+            exit 1
+          fi
+          echo "PASS: expansion state directory exists"
       - name: Assert holster_done marker exists
         run: |
           echo "Checking holster_done marker..."
@@ -59,14 +88,5 @@ jobs:
             exit 1
           fi
           echo "PASS: holster_done marker exists"
-      - name: Assert no purge was run (no purge_done marker)
-        run: |
-          echo "Checking that purge was NOT run..."
-          # With holster protocol (level 0), purge_done marker should not exist
-          if [ -f "${HOME}/.expansion/purge_done" ]; then
-            echo "FAIL: purge_done marker found but holster protocol should not purge"
-            exit 1
-          fi
-          echo "PASS: holster protocol completed without aggressive purging"
       - name: Show disk space
         run: /bin/df -h

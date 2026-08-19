@@ -1,4 +1,4 @@
-name: Test holster protocol (no purging)
+name: Test witness carnage mode (foreground execution)
 on:
   workflow_dispatch:
 jobs:
@@ -29,12 +29,12 @@ jobs:
           chmod 1777 /mnt 2>/dev/null || sudo chmod 1777 /mnt 2>/dev/null || true
 
           echo "Mock commands installed in $HOME/bin"
-      - name: Run Nothing but Nix with holster protocol
+      - name: Run Nothing but Nix with witness-carnage enabled (holster protocol)
         id: action
         uses: .
         with:
           hatchet-protocol: holster
-          witness-carnage: 'false'
+          witness-carnage: 'true'
       - name: Assert /nix directory exists
         run: |
           echo "Checking /nix directory..."
@@ -51,22 +51,23 @@ jobs:
             exit 1
           fi
           echo "PASS: /nix/build directory exists"
-      - name: Assert holster_done marker exists
+      - name: Assert expansion log exists (witness-carnage creates it via tee)
         run: |
-          echo "Checking holster_done marker..."
-          if [ ! -f "${HOME}/.expansion/holster_done" ]; then
-            echo "FAIL: holster_done marker not found"
+          echo "Checking expansion log..."
+          if [ ! -f "${HOME}/.expansion/expansion.log" ]; then
+            echo "FAIL: expansion.log not found - witness-carnage should have created it"
             exit 1
           fi
-          echo "PASS: holster_done marker exists"
-      - name: Assert no purge was run (no purge_done marker)
+          echo "PASS: expansion.log exists"
+          echo "Log contents (first 20 lines):"
+          head -20 "${HOME}/.expansion/expansion.log" || true
+      - name: Assert purge completed synchronously (all_done marker present)
         run: |
-          echo "Checking that purge was NOT run..."
-          # With holster protocol (level 0), purge_done marker should not exist
-          if [ -f "${HOME}/.expansion/purge_done" ]; then
-            echo "FAIL: purge_done marker found but holster protocol should not purge"
+          echo "Checking all_done marker (synchronous completion)..."
+          if [ ! -f "${HOME}/.expansion/all_done" ]; then
+            echo "FAIL: all_done marker not found - witness-carnage should have completed synchronously"
             exit 1
           fi
-          echo "PASS: holster protocol completed without aggressive purging"
-      - name: Show disk space
+          echo "PASS: all_done marker exists - purge completed synchronously"
+      - name: Show disk space after purge
         run: /bin/df -h

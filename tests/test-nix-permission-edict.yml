@@ -1,4 +1,4 @@
-name: Test nix-permission-edict grants user ownership of /nix
+name: Test nix permission edict (user ownership of /nix)
 on:
   workflow_dispatch:
 jobs:
@@ -6,42 +6,69 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Install btrfs tools
+      - name: Prepare environment and install mocks
         run: |
-          sudo apt-get install -y btrfs-progs 2>/dev/null || true
+          # Create a user-writable bin directory for mocks and add it to PATH first
+          mkdir -p "$HOME/bin"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - id: action
+          # Install mock lsb_release so the action's Ubuntu check passes
+          cp "$GITHUB_WORKSPACE/tests/fixtures/mock-lsb-release.sh" "$HOME/bin/lsb_release"
+          chmod +x "$HOME/bin/lsb_release"
+
+          # Install mock df so the action's space checks pass
+          cp "$GITHUB_WORKSPACE/tests/fixtures/mock-df.sh" "$HOME/bin/df"
+          chmod +x "$HOME/bin/df"
+
+          # Install mock sudo to intercept privileged commands that fail without CAP_SYS_ADMIN
+          cp "$GITHUB_WORKSPACE/tests/fixtures/mock-sudo.sh" "$HOME/bin/sudo"
+          chmod +x "$HOME/bin/sudo"
+
+          # Ensure /mnt exists and is writable (may not exist in Docker containers)
+          mkdir -p /mnt 2>/dev/null || sudo mkdir -p /mnt 2>/dev/null || true
+          chmod 1777 /mnt 2>/dev/null || sudo chmod 1777 /mnt 2>/dev/null || true
+
+          echo "Mock commands installed in $HOME/bin"
+      - name: Run Nothing but Nix with nix-permission-edict enabled
+        id: action
         uses: .
         with:
           hatchet-protocol: holster
-          witness-carnage: 'true'
+          witness-carnage: 'false'
           nix-permission-edict: 'true'
-        continue-on-error: true
-
-      - name: Assert action step ran
+      - name: Assert /nix directory exists
         run: |
-          echo "Action step outcome: ${{ steps.action.outcome }}"
-          echo "PASS: nix-permission-edict action step completed (outcome: ${{ steps.action.outcome }})"
-
-      - name: Assert /nix ownership if action succeeded
-        run: |
-          if [ "${{ steps.action.outcome }}" == "success" ]; then
-            if [ ! -d /nix ]; then
-              echo "FAIL: /nix directory should exist after successful run"
-              exit 1
-            fi
-            # Check that /nix is owned by the current user (nix-permission-edict: true)
-            NIX_OWNER=$(stat -c '%U' /nix)
-            CURRENT_USER=$(id -un)
-            echo "actual /nix owner: $NIX_OWNER"
-            echo "current user: $CURRENT_USER"
-            if [ "$NIX_OWNER" != "$CURRENT_USER" ]; then
-              echo "FAIL: /nix should be owned by $CURRENT_USER but is owned by $NIX_OWNER"
-              exit 1
-            fi
-            echo "PASS: /nix is owned by current user ($CURRENT_USER)"
-          else
-            echo "INFO: action did not succeed (likely missing kernel features in act), skipping ownership check"
-            echo "PASS: graceful handling of unsupported environment"
+          echo "Checking /nix directory..."
+          if [ ! -d /nix ]; then
+            echo "FAIL: /nix directory was not created"
+            exit 1
           fi
+          echo "PASS: /nix directory exists"
+      - name: Assert /nix is owned by current user
+        run: |
+          CURRENT_USER=$(id --user)
+          CURRENT_GROUP=$(id --group)
+          NIX_OWNER=$(stat -c '%u' /nix)
+          NIX_GROUP=$(stat -c '%g' /nix)
+          echo "Current user: $CURRENT_USER, group: $CURRENT_GROUP"
+          echo "/nix owner: $NIX_OWNER, group: $NIX_GROUP"
+          if [ "$NIX_OWNER" != "$CURRENT_USER" ]; then
+            echo "FAIL: /nix is owned by $NIX_OWNER, expected $CURRENT_USER"
+            exit 1
+          fi
+          if [ "$NIX_GROUP" != "$CURRENT_GROUP" ]; then
+            echo "FAIL: /nix group is $NIX_GROUP, expected $CURRENT_GROUP"
+            exit 1
+          fi
+          echo "PASS: /nix is owned by current user ($CURRENT_USER:$CURRENT_GROUP)"
+      - name: Assert current user can write to /nix
+        run: |
+          echo "Testing write access to /nix..."
+          if ! touch /nix/test-write-access 2>/dev/null; then
+            echo "FAIL: current user cannot write to /nix"
+            exit 1
+          fi
+          rm -f /nix/test-write-access
+          echo "PASS: current user can write to /nix"
+      - name: Show disk space
+        run: /bin/df -h

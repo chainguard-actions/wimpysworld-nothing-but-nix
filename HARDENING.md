@@ -8,56 +8,79 @@
 
 **Test Policy SHA:** `843adf9e4b8f85d0c08b27b9d0b09dd094b54702`
 
-**Harden Agent Version:** `1`
+**Harden Agent Version:** `2`
 
-Action **wimpysworld--nothing-but-nix/v8** was hardened automatically. 8 finding(s) were identified and resolved across 1 iteration(s).
+Action **wimpysworld--nothing-but-nix/v8** was hardened automatically. 8 finding(s) were identified and resolved across 2 iteration(s).
 
 ## Findings Fixed
 
 ### script-injection (severity: high)
 
-Multiple `${{ }}` expressions are interpolated directly inside `run:` shell command strings (sub-rule a), allowing script injection. Any value substituted by the YAML templating engine before the shell executes can contain shell metacharacters.
+Multiple `${{ ... }}` expressions are interpolated directly inside `run:` shell command strings in action.yml, violating rule (a). This allows an attacker (or a calling workflow) to inject arbitrary shell commands.
 
-**Step "The Checks"** (3 occurrences):
-- `if [[ "${{ runner.os }}" == "macOS" ]]` — runner context injected directly into shell
-- `if [[ "${{ runner.os }}" == "Windows" ]]`
-- `if [[ "${{ runner.os }}" == "Linux" ]]`
+- Line 35: `if [[ "${{ runner.os }}" == "macOS" ]]` — runner context interpolated directly in shell
+- Line 41: `if [[ "${{ runner.os }}" == "Windows" ]]` — runner context interpolated directly in shell
+- Line 47: `if [[ "${{ runner.os }}" == "Linux" ]]` — runner context interpolated directly in shell
+- Line 76: `input_protocol="${{ inputs.hatchet-protocol }}"` — user-controlled input interpolated directly in shell
+- Line 107: `min_required=$((${{ inputs.mnt-safe-haven }} + 1024))` — user-controlled input interpolated directly in arithmetic
+- Line 117: `if sudo fallocate -l $((free_space - ${{ inputs.mnt-safe-haven }}))M` — user-controlled input interpolated directly in arithmetic/shell
+- Line 128: `if [[ "${{ inputs.nix-permission-edict }}" == "true" ]]` — user-controlled input interpolated directly in shell
+- Line 152: `protocol_level="${{ steps.set-hatchet-protocol.outputs.level }}"` — step output interpolated directly in shell
+- Line 153: `root_safe_haven="${{ inputs.root-safe-haven }}"` — user-controlled input interpolated directly in shell
+- Line 220: `if [ "${{ inputs.witness-carnage }}" == "true" ]` — user-controlled input interpolated directly in shell
 
-**Step "The Hatchet Protocol"**:
-- `input_protocol="${{ inputs.hatchet-protocol }}"` — caller-controlled input injected directly into shell
-
-**Step "The Volume"** (3 occurrences):
-- `min_required=$((${{ inputs.mnt-safe-haven }} + 1024))` — caller-controlled input in arithmetic context
-- `if sudo fallocate -l $((free_space - ${{ inputs.mnt-safe-haven }}))M ...` — same input again
-- `if [[ "${{ inputs.nix-permission-edict }}" == "true" ]]` — caller-controlled input
-
-**Step "The Purge"** (3 occurrences):
-- `protocol_level="${{ steps.set-hatchet-protocol.outputs.level }}"` — step output injected directly
-- `root_safe_haven="${{ inputs.root-safe-haven }}"` — caller-controlled input
-- `if [ "${{ inputs.witness-carnage }}" == "true" ]` — caller-controlled input
-
-All of these should be moved to `env:` variables and then referenced as quoted shell variables (e.g., `"$VAR"`) inside the `run:` block.
+All of these should be moved to `env:` variables and referenced as `"$VAR"` in the shell script.
 
 Locations:
 
-- `action.yml:34`
-- `action.yml:42`
-- `action.yml:51`
-- `action.yml:79`
-- `action.yml:108`
-- `action.yml:121`
-- `action.yml:131`
-- `action.yml:145`
-- `action.yml:147`
-- `action.yml:222`
+- `action.yml:35`
+- `action.yml:41`
+- `action.yml:47`
+- `action.yml:76`
+- `action.yml:107`
+- `action.yml:117`
+- `action.yml:128`
+- `action.yml:152`
+- `action.yml:153`
+- `action.yml:220`
 
 ### unpinned-uses (severity: high)
 
-The composite action references `srz-zumix/post-run-action@v3` using a mutable tag (`@v3`) rather than a pinned 40-character commit SHA. A tag can be moved by the repository owner (or a compromised account) to point to arbitrary malicious code, creating a supply-chain attack vector. It should be pinned to a full SHA, e.g. `srz-zumix/post-run-action@<40-char-sha> # v3`.
+Several `uses:` references are pinned to mutable tags or branch names rather than immutable 40-character commit SHAs, making the action vulnerable to supply-chain attacks if the referenced tag or branch is moved or compromised.
+
+In action.yml:
+- `srz-zumix/post-run-action@v3` (tag)
+
+In .github/workflows/debug.yaml:
+- `actions/checkout@v6` (tag)
+
+In .github/workflows/test-macos.yaml:
+- `actions/checkout@v6` (tag)
+- `DeterminateSystems/determinate-nix-action@main` (branch)
+
+In .github/workflows/test-windows.yaml:
+- `actions/checkout@v6` (tag)
+
+In .github/workflows/test.yaml:
+- `actions/checkout@v6` (tag, appears 3 times)
+- `DeterminateSystems/determinate-nix-action@main` (branch)
+- `nixbuild/nix-quick-install-action@v34` (tag)
+- `cachix/install-nix-action@v31` (tag)
+
+All should be replaced with full 40-character SHA digests, e.g. `actions/checkout@<sha> # v6`.
 
 Locations:
 
 - `action.yml:228`
+- `.github/workflows/debug.yaml:17`
+- `.github/workflows/test-macos.yaml:15`
+- `.github/workflows/test-macos.yaml:20`
+- `.github/workflows/test-windows.yaml:15`
+- `.github/workflows/test.yaml:20`
+- `.github/workflows/test.yaml:28`
+- `.github/workflows/test.yaml:47`
+- `.github/workflows/test.yaml:62`
+- `.github/workflows/test.yaml:80`
 
 ### static-inline-injection (severity: high)
 
@@ -115,5 +138,19 @@ Locations:
 
 **Notes:**
 
-Fixed all script injection findings by moving ${{ }} expressions into env: blocks and referencing them as plain shell variables. Specifically: (1) 'The Checks' step: RUNNER_OS env var replaces three runner.os injections; (2) 'The Hatchet Protocol' step: INPUT_HATCHET_PROTOCOL env var replaces inputs.hatchet-protocol injection; (3) 'The Volume' step: INPUT_MNT_SAFE_HAVEN and INPUT_NIX_PERMISSION_EDICT env vars replace three injections; (4) 'The Purge' step: INPUT_PROTOCOL_LEVEL, INPUT_ROOT_SAFE_HAVEN, INPUT_WITNESS_CARNAGE env vars replace all injections — the heredoc is kept quoted ('EOF') to avoid expanding runtime shell variables, and the script reads EXPAND_PROTOCOL_LEVEL/EXPAND_ROOT_SAFE_HAVEN passed as env vars at invocation. Pinned srz-zumix/post-run-action@v3 to full SHA 42756f7452b9439d0365b7e087b2c364f54209c6.
+Fixed all script injection issues in action.yml by moving all ${{ }} expressions from run: blocks into env: blocks and referencing them as plain environment variables. Pinned all unpinned uses: references to full 40-character commit SHAs across action.yml and all .github/workflows/*.yaml files. Specifically: (1) The Checks step: runner.os → RUNNER_OS env var; (2) The Hatchet Protocol step: inputs.hatchet-protocol → INPUT_PROTOCOL env var; (3) The Volume step: inputs.mnt-safe-haven → INPUT_MNT_SAFE_HAVEN, inputs.nix-permission-edict → INPUT_NIX_PERMISSION_EDICT; (4) The Purge step: all 5 expressions moved to env: block. Pinned srz-zumix/post-run-action@v3 to SHA 42756f7452b9439d0365b7e087b2c364f54209c6, actions/checkout@v6 to df4cb1c069e1874edd31b4311f1884172cec0e10, DeterminateSystems/determinate-nix-action@main to 2a0be2498974c2b6327e19780488744384637d88, nixbuild/nix-quick-install-action@v34 to 2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035, cachix/install-nix-action@v31 to 630ae543ea3a38a9a4166f03376c02c50f408342.
+
+### Iteration 2
+
+**Fixes applied:** script-injection
+
+**Notes:**
+
+Fixed two script-injection findings in action.yml:
+
+1. 'The Volume' step: Added `if ! [[ "$INPUT_MNT_SAFE_HAVEN" =~ ^[0-9]+$ ]]` validation guard before arithmetic use. Assigned validated value to local variable `mnt_safe_haven` and replaced `$(($INPUT_MNT_SAFE_HAVEN + 1024))` and `$((free_space - $INPUT_MNT_SAFE_HAVEN))M` with `$(( mnt_safe_haven + 1024 ))` and `$(( free_space - mnt_safe_haven ))M` respectively.
+
+2. 'The Purge' step heredoc: Added `if ! [[ "$root_safe_haven" =~ ^[0-9]+$ ]]` validation guard after the assignment from `INPUT_ROOT_SAFE_HAVEN`. Replaced `$((root_safe_haven + 2048))` and `$((free_space - root_safe_haven))` with `$(( root_safe_haven + 2048 ))` and `$(( free_space - root_safe_haven ))` respectively.
+
+The integer validation prevents attackers from injecting array subscript expressions like `a[$(malicious_cmd)]` that would execute arbitrary commands inside bash arithmetic contexts.
 

@@ -1,4 +1,4 @@
-name: Test holster protocol (no purging)
+name: Test custom safe-haven values
 on:
   workflow_dispatch:
 jobs:
@@ -29,12 +29,14 @@ jobs:
           chmod 1777 /mnt 2>/dev/null || sudo chmod 1777 /mnt 2>/dev/null || true
 
           echo "Mock commands installed in $HOME/bin"
-      - name: Run Nothing but Nix with holster protocol
+      - name: Run Nothing but Nix with custom safe-haven values
         id: action
         uses: .
         with:
           hatchet-protocol: holster
           witness-carnage: 'false'
+          root-safe-haven: '4096'
+          mnt-safe-haven: '2048'
       - name: Assert /nix directory exists
         run: |
           echo "Checking /nix directory..."
@@ -51,6 +53,18 @@ jobs:
             exit 1
           fi
           echo "PASS: /nix/build directory exists"
+      - name: Assert TMPDIR is set on /mnt
+        run: |
+          echo "TMPDIR: $TMPDIR"
+          if [ -z "$TMPDIR" ]; then
+            echo "FAIL: TMPDIR is not set"
+            exit 1
+          fi
+          if [[ "$TMPDIR" != /mnt/* ]]; then
+            echo "FAIL: TMPDIR ($TMPDIR) is not under /mnt"
+            exit 1
+          fi
+          echo "PASS: TMPDIR is set to $TMPDIR"
       - name: Assert holster_done marker exists
         run: |
           echo "Checking holster_done marker..."
@@ -59,14 +73,15 @@ jobs:
             exit 1
           fi
           echo "PASS: holster_done marker exists"
-      - name: Assert no purge was run (no purge_done marker)
+      - name: Assert /mnt still has some free space (safe-haven respected)
         run: |
-          echo "Checking that purge was NOT run..."
-          # With holster protocol (level 0), purge_done marker should not exist
-          if [ -f "${HOME}/.expansion/purge_done" ]; then
-            echo "FAIL: purge_done marker found but holster protocol should not purge"
+          MNT_FREE=$(/bin/df -m --output=avail /mnt | tail -n 1 | tr -d ' ')
+          echo "Free space on /mnt: ${MNT_FREE}MB"
+          echo "mnt-safe-haven: 2048MB"
+          if [ "$MNT_FREE" -lt 100 ]; then
+            echo "FAIL: /mnt has almost no free space (${MNT_FREE}MB)"
             exit 1
           fi
-          echo "PASS: holster protocol completed without aggressive purging"
+          echo "PASS: /mnt has ${MNT_FREE}MB free"
       - name: Show disk space
         run: /bin/df -h
