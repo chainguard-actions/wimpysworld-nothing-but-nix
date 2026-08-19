@@ -1,0 +1,95 @@
+name: Test 🧪
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  determinate-nix-action:
+    name: determinate-nix-action (${{ matrix.hatchet-protocol }}) on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        hatchet-protocol: [holster, carve, cleave, rampage]
+      fail-fast: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: ./.github/actions/this
+      - name: Purge
+        uses: ./.github/actions/this
+        with:
+          hatchet-protocol: ${{ matrix.hatchet-protocol }}
+          witness-carnage: true
+      - uses: DeterminateSystems/determinate-nix-action@d96678350ffd6a456235832eb11e1c491589b7bb # main
+      - name: Nix
+        run: |
+          nix --version
+          echo "Hello Nix" | nix run "https://flakehub.com/f/NixOS/nixpkgs/*#neo-cowsay"
+          # Build a package to ensure the Nix store is functional
+          nix build "https://flakehub.com/f/NixOS/nixpkgs/*#hello"
+  nix-quick-install:
+    name: nix-quick-action (${{ matrix.hatchet-protocol }}) on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        hatchet-protocol: [holster, carve, cleave, rampage]
+      fail-fast: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: ./.github/actions/this
+      - name: Purge
+        uses: ./.github/actions/this
+        with:
+          hatchet-protocol: ${{ matrix.hatchet-protocol }}
+          witness-carnage: true
+          nix-permission-edict: true
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+      - name: Nix
+        run: |
+          nix --version
+          echo "Hello Nix" | nix run "nixpkgs#neo-cowsay"
+          # Build a package to ensure the Nix store is functional
+          nix build "nixpkgs#hello"
+  cachix-nix-action:
+    name: cachix-nix-action (${{ matrix.hatchet-protocol }}) on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        hatchet-protocol: [holster, carve, cleave, rampage]
+      fail-fast: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: ./.github/actions/this
+      - name: Purge
+        uses: ./.github/actions/this
+        with:
+          hatchet-protocol: ${{ matrix.hatchet-protocol }}
+          witness-carnage: true
+          nix-permission-edict: true
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31
+      - name: Nix
+        run: |
+          nix --version
+          echo "Hello Nix" | nix run "nixpkgs#neo-cowsay"
+          # Build a package to ensure the Nix store is functional
+          nix build "nixpkgs#hello"          

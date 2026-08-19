@@ -1,4 +1,4 @@
-name: Test carve protocol
+name: Test carve protocol (combine free space from / and /mnt)
 on:
   workflow_dispatch:
 jobs:
@@ -6,59 +6,126 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Ensure /nix does not exist before action
-        run: |
-          if [ -d /nix ]; then
-            sudo rm -rf /nix
-          fi
-          echo "Pre-check: /nix does not exist"
-      - name: Install btrfs tools
+
+      - name: Install prerequisites
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y btrfs-progs || true
+          sudo apt-get install -y btrfs-progs lsb-release
+          sudo modprobe loop || true
+
+      - name: Pre-check - /nix must not exist
+        run: |
+          if [ -d /nix ]; then
+            echo "FAIL: /nix already exists, cannot run test"
+            exit 1
+          fi
+          echo "PASS: /nix does not exist yet"
+
       - id: action
         uses: .
+        continue-on-error: true
         with:
           hatchet-protocol: carve
-          witness-carnage: "true"
-          root-safe-haven: "2048"
-          mnt-safe-haven: "1024"
-          nix-permission-edict: "false"
-        continue-on-error: true
-      - name: Assert action ran (carve protocol - level 1)
+          witness-carnage: 'true'
+          root-safe-haven: '2048'
+          mnt-safe-haven: '1024'
+          nix-permission-edict: 'false'
+
+      - name: Show diagnostics
         run: |
-          echo "Action outcome: ${{ steps.action.outcome }}"
-          echo "Carve protocol is level 1 - skips Setup and Local steps"
-          echo "Carve protocol does NOT purge docker/snap/apt"
-          # Verify environment is Ubuntu (environment check would pass)
-          if [ "$(lsb_release -is)" = "Ubuntu" ]; then
-            echo "PASS: Running on Ubuntu - environment check passes"
-          else
-            echo "FAIL: Not running on Ubuntu"
-            exit 1
-          fi
-          # Check if expansion dir was created (created in The Volume step)
-          if [ -d "${HOME}/.expansion" ]; then
-            echo "PASS: expansion directory exists"
-            ls -la "${HOME}/.expansion/" || true
-          else
-            echo "INFO: expansion directory not found - The Volume step may have failed in Docker"
-            echo "This is expected in Docker/act environments without btrfs/losetup support"
-          fi
-      - name: Assert carve protocol does not run docker/snap purge (level 1 < 2)
+          echo "=== Action outcome: ${{ steps.action.outcome }} ==="
+          echo "=== Disk usage ==="
+          df -h || true
+          echo "=== Loop devices ==="
+          sudo losetup -l || true
+          echo "=== Expansion dir ==="
+          ls -la "${HOME}/.expansion/" 2>/dev/null || echo "expansion dir missing"
+          echo "=== Mount info for /nix ==="
+          mountpoint /nix && echo "/nix is mounted" || echo "/nix is NOT mounted"
+          echo "=== Expansion log ==="
+          cat "${HOME}/.expansion/expansion.log" 2>/dev/null || echo "no log"
+
+      - name: Check if /nix was successfully mounted
+        id: nix-check
         run: |
-          echo "Verifying carve protocol does not run cleave/rampage steps..."
-          # With carve (level 1), the expansion script should not create docker_done/snap_done
-          if [ -f "${HOME}/.expansion/docker_done" ]; then
-            echo "FAIL: docker_done marker found but carve protocol (level 1) should not purge docker"
+          if mountpoint -q /nix 2>/dev/null; then
+            echo "mounted=true" >> $GITHUB_OUTPUT
+            echo "INFO: /nix is mounted, will run full assertions"
+          else
+            echo "mounted=false" >> $GITHUB_OUTPUT
+            echo "INFO: /nix is not mounted - skipping volume-dependent assertions"
+          fi
+
+      - name: Assert /nix has usable space
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          nix_space=$(df -m --output=avail /nix | tail -n 1 | tr -d ' ')
+          echo "Available space on /nix: ${nix_space}MB"
+          if [ "${nix_space}" -lt 1024 ]; then
+            echo "FAIL: /nix has less than 1024MB available (got ${nix_space}MB)"
+            df -h
             exit 1
           fi
-          if [ -f "${HOME}/.expansion/snap_done" ]; then
-            echo "FAIL: snap_done marker found but carve protocol (level 1) should not purge snap"
+          echo "PASS: /nix has ${nix_space}MB available"
+
+      - name: Assert carve completion markers exist
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          echo "Checking expansion markers..."
+          ls -la "${HOME}/.expansion/" || true
+
+          if [ ! -f "${HOME}/.expansion/holster_done" ]; then
+            echo "FAIL: holster_done marker not found"
             exit 1
           fi
-          if [ -f "${HOME}/.expansion/cleave_done" ]; then
-            echo "FAIL: cleave_done marker found but carve protocol (level 1) should not cleave"
+          echo "PASS: holster_done marker exists"
+
+          if [ ! -f "${HOME}/.expansion/carve_done" ]; then
+            echo "FAIL: carve_done marker not found (expected for carve protocol)"
+            cat "${HOME}/.expansion/expansion.log" 2>/dev/null || true
             exit 1
           fi
-          echo "PASS: No unexpected purge markers found for carve protocol"
+          echo "PASS: carve_done marker exists"
+
+          if [ ! -f "${HOME}/.expansion/all_done" ]; then
+            echo "FAIL: all_done marker not found"
+            cat "${HOME}/.expansion/expansion.log" 2>/dev/null || true
+            exit 1
+          fi
+          echo "PASS: all_done marker exists"
+
+      - name: Assert TMPDIR is set to /nix/_tmp
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          echo "TMPDIR: $TMPDIR"
+          if [ "$TMPDIR" != "/nix/_tmp" ]; then
+            echo "FAIL: expected TMPDIR=/nix/_tmp, got TMPDIR=$TMPDIR"
+            exit 1
+          fi
+          echo "PASS: TMPDIR is set correctly"
+
+      - name: Assert btrfs filesystem is present on /nix
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          if ! sudo btrfs filesystem show /nix; then
+            echo "FAIL: btrfs filesystem not found on /nix"
+            exit 1
+          fi
+          echo "PASS: btrfs filesystem is present on /nix"
+
+      - name: Show final disk usage
+        run: |
+          echo "Final disk usage:"
+          df -h

@@ -1,0 +1,27 @@
+name: Test Windows Guard Rails 🪟
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  test-windows-guard-rails:
+    name: Test Windows Guard Rails
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: ./.github/actions/this
+      - name: Test Nothing but Nix (should skip gracefully)
+        uses: ./.github/actions/this
+        with:
+          hatchet-protocol: cleave
+      - name: Verify workflow continues after graceful skip
+        run: |
+          echo "✅ Windows workflow continued successfully after nothing-but-nix was skipped"

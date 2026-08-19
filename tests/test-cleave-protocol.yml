@@ -1,4 +1,4 @@
-name: Test holster protocol (no purging, volume only)
+name: Test cleave protocol (standard purging, synchronous)
 on:
   workflow_dispatch:
 jobs:
@@ -25,7 +25,7 @@ jobs:
         uses: .
         continue-on-error: true
         with:
-          hatchet-protocol: holster
+          hatchet-protocol: cleave
           witness-carnage: 'true'
           root-safe-haven: '2048'
           mnt-safe-haven: '1024'
@@ -42,8 +42,8 @@ jobs:
           ls -la "${HOME}/.expansion/" 2>/dev/null || echo "expansion dir missing"
           echo "=== Mount info for /nix ==="
           mountpoint /nix && echo "/nix is mounted" || echo "/nix is NOT mounted"
-          echo "=== Expansion log ==="
-          cat "${HOME}/.expansion/expansion.log" 2>/dev/null || echo "no log"
+          echo "=== Expansion log (last 100 lines) ==="
+          tail -100 "${HOME}/.expansion/expansion.log" 2>/dev/null || echo "no log"
 
       - name: Check if /nix was successfully mounted
         id: nix-check
@@ -53,11 +53,10 @@ jobs:
             echo "INFO: /nix is mounted, will run full assertions"
           else
             echo "mounted=false" >> $GITHUB_OUTPUT
-            echo "INFO: /nix is not mounted (action may have failed or environment lacks support)"
-            echo "INFO: Skipping volume-dependent assertions"
+            echo "INFO: /nix is not mounted - skipping volume-dependent assertions"
           fi
 
-      - name: Assert /nix has usable space
+      - name: Assert /nix has substantial space
         run: |
           if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
             echo "SKIP: /nix not mounted"
@@ -67,9 +66,87 @@ jobs:
           echo "Available space on /nix: ${nix_space}MB"
           if [ "${nix_space}" -lt 1024 ]; then
             echo "FAIL: /nix has less than 1024MB available (got ${nix_space}MB)"
+            df -h
             exit 1
           fi
           echo "PASS: /nix has ${nix_space}MB available"
+
+      - name: Assert purge completion markers exist
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          echo "Checking expansion markers..."
+          ls -la "${HOME}/.expansion/" || true
+
+          if [ ! -f "${HOME}/.expansion/holster_done" ]; then
+            echo "FAIL: holster_done marker not found"
+            exit 1
+          fi
+          echo "PASS: holster_done marker exists"
+
+          if [ ! -f "${HOME}/.expansion/purge_done" ]; then
+            echo "FAIL: purge_done marker not found (expected for cleave protocol)"
+            cat "${HOME}/.expansion/expansion.log" 2>/dev/null || true
+            exit 1
+          fi
+          echo "PASS: purge_done marker exists"
+
+          if [ ! -f "${HOME}/.expansion/all_done" ]; then
+            echo "FAIL: all_done marker not found"
+            cat "${HOME}/.expansion/expansion.log" 2>/dev/null || true
+            exit 1
+          fi
+          echo "PASS: all_done marker exists"
+
+      - name: Assert docker was cleansed
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          if [ ! -f "${HOME}/.expansion/docker_done" ]; then
+            echo "FAIL: docker_done marker not found (expected for cleave protocol)"
+            exit 1
+          fi
+          echo "PASS: docker_done marker exists"
+
+      - name: Assert snap was cleansed
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          if [ ! -f "${HOME}/.expansion/snap_done" ]; then
+            echo "FAIL: snap_done marker not found (expected for cleave protocol)"
+            exit 1
+          fi
+          echo "PASS: snap_done marker exists"
+
+      - name: Assert apt was cleansed
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          if [ ! -f "${HOME}/.expansion/apt_done" ]; then
+            echo "FAIL: apt_done marker not found (expected for cleave protocol)"
+            exit 1
+          fi
+          echo "PASS: apt_done marker exists"
+
+      - name: Assert cleave was completed
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          if [ ! -f "${HOME}/.expansion/cleave_done" ]; then
+            echo "FAIL: cleave_done marker not found (expected for cleave protocol)"
+            exit 1
+          fi
+          echo "PASS: cleave_done marker exists"
 
       - name: Assert TMPDIR is set to /nix/_tmp
         run: |
@@ -83,59 +160,6 @@ jobs:
             exit 1
           fi
           echo "PASS: TMPDIR is set correctly"
-
-      - name: Assert /nix/_tmp exists and is writable
-        run: |
-          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
-            echo "SKIP: /nix not mounted"
-            exit 0
-          fi
-          if [ ! -d /nix/_tmp ]; then
-            echo "FAIL: /nix/_tmp directory does not exist"
-            exit 1
-          fi
-          touch /nix/_tmp/test_write_$$ && rm /nix/_tmp/test_write_$$
-          echo "PASS: /nix/_tmp exists and is writable"
-
-      - name: Assert holster_done marker exists
-        run: |
-          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
-            echo "SKIP: /nix not mounted"
-            exit 0
-          fi
-          if [ ! -f "${HOME}/.expansion/holster_done" ]; then
-            echo "FAIL: holster_done marker not found"
-            ls -la "${HOME}/.expansion/" || echo "expansion dir missing"
-            exit 1
-          fi
-          echo "PASS: holster_done marker exists"
-          cat "${HOME}/.expansion/holster_done"
-
-      - name: Assert all_done marker exists
-        run: |
-          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
-            echo "SKIP: /nix not mounted"
-            exit 0
-          fi
-          if [ ! -f "${HOME}/.expansion/all_done" ]; then
-            echo "FAIL: all_done marker not found"
-            ls -la "${HOME}/.expansion/" || echo "expansion dir missing"
-            cat "${HOME}/.expansion/expansion.log" 2>/dev/null || true
-            exit 1
-          fi
-          echo "PASS: all_done marker exists"
-
-      - name: Assert btrfs filesystem is present on /nix
-        run: |
-          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
-            echo "SKIP: /nix not mounted"
-            exit 0
-          fi
-          if ! sudo btrfs filesystem show /nix; then
-            echo "FAIL: btrfs filesystem not found on /nix"
-            exit 1
-          fi
-          echo "PASS: btrfs filesystem is present on /nix"
 
       - name: Show final disk usage
         run: |

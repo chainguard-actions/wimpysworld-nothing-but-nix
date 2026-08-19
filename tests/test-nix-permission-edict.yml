@@ -1,4 +1,4 @@
-name: Test nix permission edict
+name: Test nix-permission-edict (user ownership of /nix)
 on:
   workflow_dispatch:
 jobs:
@@ -6,63 +6,93 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Ensure /nix does not exist before action
-        run: |
-          if [ -d /nix ]; then
-            sudo rm -rf /nix
-          fi
-          echo "Pre-check: /nix does not exist"
-      - name: Install btrfs tools
+
+      - name: Install prerequisites
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y btrfs-progs || true
-      - id: action
-        uses: .
-        with:
-          hatchet-protocol: holster
-          witness-carnage: "true"
-          root-safe-haven: "2048"
-          mnt-safe-haven: "1024"
-          nix-permission-edict: "true"
-        continue-on-error: true
-      - name: Assert action ran with nix-permission-edict enabled
+          sudo apt-get install -y btrfs-progs lsb-release
+          sudo modprobe loop || true
+
+      - name: Pre-check - /nix must not exist
         run: |
-          echo "Action outcome: ${{ steps.action.outcome }}"
-          echo "nix-permission-edict=true should chown /nix to current user"
-          # Verify environment is Ubuntu (environment check would pass)
-          if [ "$(lsb_release -is)" = "Ubuntu" ]; then
-            echo "PASS: Running on Ubuntu - environment check passes"
-          else
-            echo "FAIL: Not running on Ubuntu"
+          if [ -d /nix ]; then
+            echo "FAIL: /nix already exists, cannot run test"
             exit 1
           fi
-      - name: Assert /nix ownership if it exists
+          echo "PASS: /nix does not exist yet"
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          hatchet-protocol: holster
+          witness-carnage: 'true'
+          nix-permission-edict: 'true'
+
+      - name: Show diagnostics
         run: |
-          if [ -d /nix ]; then
-            nix_owner=$(stat -c '%U' /nix)
-            current_user=$(id -un)
-            echo "nix owner: $nix_owner"
-            echo "current user: $current_user"
-            if [ "$nix_owner" != "$current_user" ]; then
-              echo "FAIL: /nix is owned by '$nix_owner', expected '$current_user'"
-              exit 1
-            fi
-            echo "PASS: /nix is owned by current user ($current_user)"
-          else
-            echo "INFO: /nix does not exist - The Volume step likely failed in Docker"
-            echo "This is expected in Docker/act environments without btrfs/losetup support"
-            echo "PASS: Skipping ownership check (btrfs not available in Docker)"
-          fi
-      - name: Assert TMPDIR is set to /nix/_tmp if /nix exists
+          echo "=== Action outcome: ${{ steps.action.outcome }} ==="
+          echo "=== Disk usage ==="
+          df -h || true
+          echo "=== Loop devices ==="
+          sudo losetup -l || true
+          echo "=== Mount info for /nix ==="
+          mountpoint /nix && echo "/nix is mounted" || echo "/nix is NOT mounted"
+          echo "=== /nix ownership ==="
+          ls -la / | grep nix || echo "/nix not found"
+          echo "=== Expansion log ==="
+          cat "${HOME}/.expansion/expansion.log" 2>/dev/null || echo "no log"
+
+      - name: Check if /nix was successfully mounted
+        id: nix-check
         run: |
-          echo "TMPDIR: $TMPDIR"
-          if [ -d /nix ]; then
-            if [ "$TMPDIR" != "/nix/_tmp" ]; then
-              echo "FAIL: expected TMPDIR='/nix/_tmp', got '$TMPDIR'"
-              exit 1
-            fi
-            echo "PASS: TMPDIR is set correctly"
+          if mountpoint -q /nix 2>/dev/null; then
+            echo "mounted=true" >> $GITHUB_OUTPUT
+            echo "INFO: /nix is mounted, will run full assertions"
           else
-            echo "INFO: /nix not mounted, TMPDIR check skipped"
-            echo "PASS: Skipping TMPDIR check (btrfs not available in Docker)"
+            echo "mounted=false" >> $GITHUB_OUTPUT
+            echo "INFO: /nix is not mounted - skipping volume-dependent assertions"
           fi
+
+      - name: Assert /nix is owned by current user
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          current_uid=$(id --user)
+          current_gid=$(id --group)
+          nix_uid=$(stat -c '%u' /nix)
+          nix_gid=$(stat -c '%g' /nix)
+          echo "Current user: uid=${current_uid} gid=${current_gid}"
+          echo "/nix owner:   uid=${nix_uid} gid=${nix_gid}"
+          if [ "${nix_uid}" != "${current_uid}" ]; then
+            echo "FAIL: /nix uid is ${nix_uid}, expected ${current_uid}"
+            exit 1
+          fi
+          if [ "${nix_gid}" != "${current_gid}" ]; then
+            echo "FAIL: /nix gid is ${nix_gid}, expected ${current_gid}"
+            exit 1
+          fi
+          echo "PASS: /nix is owned by current user (uid=${current_uid}, gid=${current_gid})"
+
+      - name: Assert current user can write to /nix
+        run: |
+          if [ "${{ steps.nix-check.outputs.mounted }}" != "true" ]; then
+            echo "SKIP: /nix not mounted"
+            exit 0
+          fi
+          test_file="/nix/test_user_write_$$"
+          if touch "${test_file}"; then
+            rm "${test_file}"
+            echo "PASS: current user can write to /nix"
+          else
+            echo "FAIL: current user cannot write to /nix"
+            ls -la /nix
+            exit 1
+          fi
+
+      - name: Show final disk usage
+        run: |
+          echo "Final disk usage:"
+          df -h
