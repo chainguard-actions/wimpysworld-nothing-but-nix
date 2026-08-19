@@ -4,86 +4,114 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      GITHUB_ACTIONS: "true"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Pre-flight setup
+
+      - name: Check environment prerequisites
+        id: prereq
         run: |
-          # Install btrfs tools if not present
-          if ! command -v mkfs.btrfs &>/dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq btrfs-progs
-          fi
-          # Remove /nix if it exists (act may create it)
+          # Check if /nix already exists (act containers often have /nix)
           if [ -d /nix ]; then
-            sudo umount /nix 2>/dev/null || true
-            sudo rm -rf /nix
+            echo "nix_exists=true" >> $GITHUB_OUTPUT
+            echo "SKIP: /nix already exists - action cannot run in this environment"
+          else
+            echo "nix_exists=false" >> $GITHUB_OUTPUT
+            echo "OK: /nix does not exist"
           fi
-          echo "Pre-check: /nix does not exist"
+
+          # Check if we have loop device support
+          if sudo losetup --find 2>/dev/null; then
+            echo "loop_available=true" >> $GITHUB_OUTPUT
+            echo "OK: loop devices available"
+          else
+            echo "loop_available=false" >> $GITHUB_OUTPUT
+            echo "SKIP: loop devices not available"
+          fi
+
+          # Check if btrfs tools are available
+          if command -v mkfs.btrfs 2>/dev/null; then
+            echo "btrfs_available=true" >> $GITHUB_OUTPUT
+            echo "OK: btrfs tools available"
+          else
+            echo "btrfs_available=false" >> $GITHUB_OUTPUT
+            echo "SKIP: btrfs tools not available"
+          fi
+
+      - name: Install btrfs tools if needed
+        if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true' && steps.prereq.outputs.btrfs_available == 'false'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq btrfs-progs
+
       - id: action
+        if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
         uses: .
         with:
           hatchet-protocol: holster
           witness-carnage: 'true'
+          nix-permission-edict: 'true'
           root-safe-haven: '2048'
           mnt-safe-haven: '1024'
-          nix-permission-edict: 'true'
-        continue-on-error: true
-      - name: Check action outcome
+
+      - name: Assert is_supported output is true
+        if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
+        env:
+          ACTUAL: ${{ steps.action.outputs.is_supported }}
         run: |
-          echo "Action outcome: ${{ steps.action.outcome }}"
-          if [ "${{ steps.action.outcome }}" = "success" ]; then
-            echo "PASS: action completed successfully"
-          else
-            echo "INFO: action did not complete - Docker environment may lack loop device or btrfs support"
-            df -h || true
-            ls /mnt/ || true
-            echo "PASS: action ran (infrastructure limitations in Docker are expected)"
-          fi
-      - name: Assert /nix was created (if action succeeded)
-        run: |
-          if [ "${{ steps.action.outcome }}" != "success" ]; then
-            echo "SKIP: action did not succeed, skipping /nix assertion"
-            exit 0
-          fi
-          if [ ! -d /nix ]; then
-            echo "FAIL: /nix directory was not created"
+          echo "actual is_supported: $ACTUAL"
+          if [ "$ACTUAL" != "true" ]; then
+            echo "FAIL: expected is_supported='true', got '$ACTUAL'"
             exit 1
           fi
-          echo "PASS: /nix exists"
-          df -h /nix || true
-      - name: Assert /nix is owned by current user (if action succeeded)
+          echo "PASS: is_supported is true"
+
+      - name: Assert /nix is mounted
+        if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
         run: |
-          if [ "${{ steps.action.outcome }}" != "success" ]; then
-            echo "SKIP: action did not succeed, skipping ownership assertion"
-            exit 0
+          if ! mountpoint -q /nix; then
+            echo "FAIL: /nix is not a mountpoint"
+            df -h
+            exit 1
           fi
-          NIX_OWNER=$(stat -c '%U' /nix)
-          CURRENT_USER=$(id --user --name)
-          echo "nix owner: $NIX_OWNER"
-          echo "current user: $CURRENT_USER"
+          echo "PASS: /nix is mounted"
+
+      - name: Assert /nix is owned by current user (nix-permission-edict)
+        if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
+        run: |
+          CURRENT_USER=$(id --user)
+          CURRENT_GROUP=$(id --group)
+          NIX_OWNER=$(stat -c '%u' /nix)
+          NIX_GROUP=$(stat -c '%g' /nix)
+          echo "Current user: $CURRENT_USER, group: $CURRENT_GROUP"
+          echo "/nix owner: $NIX_OWNER, group: $NIX_GROUP"
           if [ "$NIX_OWNER" != "$CURRENT_USER" ]; then
-            echo "FAIL: expected /nix to be owned by '$CURRENT_USER', got '$NIX_OWNER'"
+            echo "FAIL: /nix is owned by uid $NIX_OWNER, expected $CURRENT_USER"
+            ls -la / | grep nix || true
             exit 1
           fi
-          echo "PASS: /nix is owned by current user"
-      - name: Assert /nix is writable by current user (if action succeeded)
-        run: |
-          if [ "${{ steps.action.outcome }}" != "success" ]; then
-            echo "SKIP: action did not succeed, skipping writability assertion"
-            exit 0
-          fi
-          if ! touch /nix/test_write_permission 2>/dev/null; then
-            echo "FAIL: /nix is not writable by current user"
+          if [ "$NIX_GROUP" != "$CURRENT_GROUP" ]; then
+            echo "FAIL: /nix group is $NIX_GROUP, expected $CURRENT_GROUP"
             exit 1
           fi
-          rm -f /nix/test_write_permission
-          echo "PASS: /nix is writable by current user"
-      - name: Show expansion log
-        if: always()
+          echo "PASS: /nix is owned by current user ($CURRENT_USER:$CURRENT_GROUP)"
+
+      - name: Assert current user can write to /nix
+        if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
         run: |
-          echo "=== Expansion log ==="
-          cat "${HOME}/.expansion/expansion.log" 2>/dev/null || echo "(no log yet)"
-          echo "=== Expansion markers ==="
-          ls -ltr "${HOME}/.expansion/" 2>/dev/null || echo "(no markers)"
+          if ! touch /nix/test-write-permission 2>/dev/null; then
+            echo "FAIL: current user cannot write to /nix"
+            ls -la /nix/ || true
+            exit 1
+          fi
+          rm -f /nix/test-write-permission
+          echo "PASS: current user can write to /nix"
+
+      - name: Report skip reason
+        if: steps.prereq.outputs.nix_exists == 'true' || steps.prereq.outputs.loop_available == 'false'
+        run: |
+          echo "Test skipped due to environment constraints:"
+          echo "  /nix exists: ${{ steps.prereq.outputs.nix_exists }}"
+          echo "  loop devices available: ${{ steps.prereq.outputs.loop_available }}"
+          echo "This action requires a fresh GitHub Actions runner without /nix pre-installed"
+          echo "and with loop device support (privileged Docker mode)."
+          echo "PASS: graceful skip in unsupported environment"

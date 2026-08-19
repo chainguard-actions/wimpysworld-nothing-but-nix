@@ -1,4 +1,4 @@
-name: Test holster protocol (level 0)
+name: Test background purge mode (witness-carnage false)
 on:
   workflow_dispatch:
 jobs:
@@ -48,7 +48,7 @@ jobs:
         uses: .
         with:
           hatchet-protocol: holster
-          witness-carnage: 'true'
+          witness-carnage: 'false'
           root-safe-haven: '2048'
           mnt-safe-haven: '1024'
 
@@ -64,10 +64,9 @@ jobs:
           fi
           echo "PASS: is_supported is true"
 
-      - name: Assert /nix was created and mounted
+      - name: Assert /nix is mounted (volume created synchronously)
         if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
         run: |
-          echo "Checking /nix mount..."
           if ! mountpoint -q /nix; then
             echo "FAIL: /nix is not a mountpoint"
             df -h
@@ -75,31 +74,22 @@ jobs:
           fi
           echo "PASS: /nix is mounted"
 
-      - name: Assert /nix/build directory exists
+      - name: Assert expansion log was created (background process started)
         if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
         run: |
-          if [ ! -d /nix/build ]; then
-            echo "FAIL: /nix/build directory does not exist"
-            ls -la /nix/ || true
+          # The expansion log file is created when the background process starts
+          # Give it a moment to start
+          sleep 2
+          if [ ! -f "${HOME}/.expansion/expansion.log" ]; then
+            echo "FAIL: expansion.log not found - background process may not have started"
+            ls -la "${HOME}/.expansion/" || true
             exit 1
           fi
-          echo "PASS: /nix/build exists"
+          echo "PASS: expansion.log exists (background process started)"
+          echo "=== expansion.log content so far ==="
+          cat "${HOME}/.expansion/expansion.log" || true
 
-      - name: Assert TMPDIR is set on /mnt
-        if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
-        run: |
-          echo "TMPDIR=$TMPDIR"
-          if [ -z "$TMPDIR" ]; then
-            echo "FAIL: TMPDIR is not set"
-            exit 1
-          fi
-          if [[ "$TMPDIR" != /mnt/* ]]; then
-            echo "FAIL: TMPDIR ($TMPDIR) is not under /mnt"
-            exit 1
-          fi
-          echo "PASS: TMPDIR is set to $TMPDIR"
-
-      - name: Assert expansion state directory exists
+      - name: Assert holster_done marker exists (volume step completed)
         if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
         run: |
           if [ ! -f "${HOME}/.expansion/holster_done" ]; then
@@ -108,7 +98,14 @@ jobs:
             exit 1
           fi
           echo "PASS: holster_done marker exists"
-          cat "${HOME}/.expansion/holster_done"
+
+      - name: Show disk space
+        if: steps.prereq.outputs.nix_exists == 'false' && steps.prereq.outputs.loop_available == 'true'
+        run: |
+          echo "=== Disk space ==="
+          df -h
+          echo "=== /nix filesystem ==="
+          sudo btrfs filesystem show /nix || true
 
       - name: Report skip reason
         if: steps.prereq.outputs.nix_exists == 'true' || steps.prereq.outputs.loop_available == 'false'

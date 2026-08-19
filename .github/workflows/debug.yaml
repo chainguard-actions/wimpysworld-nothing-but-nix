@@ -1,0 +1,39 @@
+name: Debug 🐛
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+  
+jobs:
+  test-ubuntu:
+    name: Debug ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+      fail-fast: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: ./.github/actions/this
+      - name: Purge
+        uses: ./.github/actions/this
+        with:
+          hatchet-protocol: rampage
+          witness-carnage: true
+          mnt-safe-haven: 10240
+          root-safe-haven: 10240
+      - name: Debug
+        run: |
+          sudo du -csh /opt/* | grep -v "Z 0"
+          sudo du -csh /usr/bin/* | grep -v "Z 0"
+          sudo du -csh /usr/lib/* | grep -v "Z 0"
+          sudo du -csh /usr/share/* | grep -v "Z 0"
+          sudo du -csh /var/lib/* | grep -v "Z 0"
+          dpkg-query -W -f='${Installed-Size;8}\t${Status;1}\t${Package}\n' | grep -v "\sd\s" | sort -n | cut -f1,3-
