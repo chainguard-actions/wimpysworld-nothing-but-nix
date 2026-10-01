@@ -1,4 +1,4 @@
-name: Test holster protocol (no purging)
+name: Test rampage protocol (aggressive purging)
 on:
   workflow_dispatch:
 jobs:
@@ -10,8 +10,9 @@ jobs:
         uses: .
         continue-on-error: true
         with:
-          hatchet-protocol: holster
+          hatchet-protocol: rampage
           witness-carnage: 'true'
+          root-safe-haven: '2048'
           mnt-safe-haven: '1024'
       - name: Assert action ran (succeeded or failed gracefully due to container limitations)
         env:
@@ -19,9 +20,9 @@ jobs:
         run: |
           echo "outcome: $OUTCOME"
           if [ "$OUTCOME" = "success" ]; then
-            echo "Action succeeded - verifying /nix mount..."
+            echo "Action succeeded - verifying /nix mount after rampage..."
             if ! mountpoint -q /nix; then
-              echo "FAIL: action succeeded but /nix is not mounted"
+              echo "FAIL: action succeeded but /nix is not mounted after rampage"
               exit 1
             fi
             echo "PASS: /nix is mounted"
@@ -32,23 +33,35 @@ jobs:
               exit 1
             fi
             echo "PASS: /nix is btrfs"
-            if [ ! -d /nix/_temp ]; then
-              echo "FAIL: /nix/_temp directory does not exist"
-              exit 1
-            fi
-            echo "PASS: /nix/_temp exists"
             if [ "$TMPDIR" != "/nix/_temp" ]; then
               echo "FAIL: expected TMPDIR=/nix/_temp but got '$TMPDIR'"
               exit 1
             fi
             echo "PASS: TMPDIR is /nix/_temp"
-            if [ ! -f "${HOME}/.expansion/holster_done" ]; then
+            expansion_dir="${HOME}/.expansion"
+            ls -la "$expansion_dir/" || true
+            if [ ! -f "$expansion_dir/holster_done" ]; then
               echo "FAIL: holster_done state file not found"
-              ls -la "${HOME}/.expansion/" 2>/dev/null || echo "(expansion dir missing)"
               exit 1
             fi
-            echo "PASS: holster_done state file exists"
-            cat "${HOME}/.expansion/holster_done"
+            echo "PASS: holster_done exists"
+            if [ ! -f "$expansion_dir/purge_done" ]; then
+              echo "FAIL: purge_done state file not found (rampage should have completed purge)"
+              exit 1
+            fi
+            echo "PASS: purge_done exists"
+            if [ ! -f "$expansion_dir/rampage_done" ]; then
+              echo "FAIL: rampage_done state file not found"
+              exit 1
+            fi
+            echo "PASS: rampage_done exists"
+            avail_mb=$(df -m --output=avail /nix | tail -n 1 | tr -d ' ')
+            echo "Available space on /nix: ${avail_mb}MB"
+            if [ "$avail_mb" -lt 10000 ]; then
+              echo "FAIL: expected at least 10GB free on /nix after rampage, got ${avail_mb}MB"
+              exit 1
+            fi
+            echo "PASS: /nix has ${avail_mb}MB available"
           elif [ "$OUTCOME" = "failure" ]; then
             echo "PASS: action failed gracefully (disk/mount operations not available in Docker container)"
           else

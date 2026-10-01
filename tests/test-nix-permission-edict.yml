@@ -4,104 +4,52 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      GITHUB_ACTIONS: "true"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Install required tools
-        shell: bash
-        run: |
-          echo "=== Installing required tools ==="
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq btrfs-progs lsb-release
-          echo "btrfs-progs installed"
-          which mkfs.btrfs && echo "mkfs.btrfs: OK"
-          which losetup && echo "losetup: OK"
-          which fallocate && echo "fallocate: OK"
-          lsb_release -is
-
-      - name: Pre-flight check
-        id: preflight
-        shell: bash
-        run: |
-          echo "=== Pre-flight environment check ==="
-          echo "OS: $(uname -a)"
-          echo "LSB: $(lsb_release -is 2>/dev/null || echo 'N/A')"
-          df -h
-          if [ -d /nix ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "WARNING: /nix already exists, skipping action test"
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Run action with nix-permission-edict enabled
-        id: action
-        if: steps.preflight.outputs.skip == 'false'
-        continue-on-error: true
+      - id: action
         uses: .
+        continue-on-error: true
         with:
           hatchet-protocol: holster
-          witness-carnage: "true"
-          nix-permission-edict: "true"
-          mnt-safe-haven: "512"
-          root-safe-haven: "1024"
-
-      - name: Check action outcome and verify what we can
-        if: steps.preflight.outputs.skip == 'false'
-        shell: bash
+          witness-carnage: 'true'
+          nix-permission-edict: 'true'
+          mnt-safe-haven: '1024'
+      - name: Assert action ran (succeeded or failed gracefully due to container limitations)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
         run: |
-          echo "=== Action outcome: ${{ steps.action.outcome }} ==="
-          echo "=== Checking expansion state files ==="
-          ls -la "${HOME}/.expansion/" 2>/dev/null || echo "No expansion directory"
-
-          if mountpoint -q /nix 2>/dev/null; then
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "Action succeeded - verifying /nix mount..."
+            if ! mountpoint -q /nix; then
+              echo "FAIL: action succeeded but /nix is not mounted"
+              exit 1
+            fi
             echo "PASS: /nix is mounted"
-
-            # Check /nix ownership (nix-permission-edict should grant user ownership)
-            CURRENT_USER=$(id --user)
-            NIX_OWNER=$(stat -c '%u' /nix)
-            echo "Current user UID: $CURRENT_USER"
-            echo "/nix owner UID: $NIX_OWNER"
-            if [ "$NIX_OWNER" = "$CURRENT_USER" ]; then
-              echo "PASS: /nix is owned by current user"
-            else
-              echo "FAIL: /nix is not owned by current user (owner=$NIX_OWNER, current=$CURRENT_USER)"
-              ls -la / | grep nix || true
+            current_uid=$(id --user)
+            current_gid=$(id --group)
+            nix_uid=$(stat -c '%u' /nix)
+            nix_gid=$(stat -c '%g' /nix)
+            echo "Current user: uid=$current_uid gid=$current_gid"
+            echo "/nix owner: uid=$nix_uid gid=$nix_gid"
+            if [ "$nix_uid" != "$current_uid" ]; then
+              echo "FAIL: /nix uid is $nix_uid, expected $current_uid"
               exit 1
             fi
-
-            # Check user can write to /nix
-            if touch /nix/test-write-access 2>/dev/null; then
-              rm -f /nix/test-write-access
-              echo "PASS: user can write to /nix"
-            else
-              echo "FAIL: cannot write to /nix as current user"
+            if [ "$nix_gid" != "$current_gid" ]; then
+              echo "FAIL: /nix gid is $nix_gid, expected $current_gid"
               exit 1
             fi
-
-            # Check holster_done
-            if [ -f "${HOME}/.expansion/holster_done" ]; then
-              echo "PASS: holster_done state file exists"
-              cat "${HOME}/.expansion/holster_done"
-            else
-              echo "WARN: holster_done state file not found"
+            echo "PASS: /nix is owned by current user"
+            if ! touch /nix/.test-write-access 2>/dev/null; then
+              echo "FAIL: current user cannot write to /nix"
+              exit 1
             fi
+            rm -f /nix/.test-write-access
+            echo "PASS: current user can write to /nix"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (disk/mount operations not available in Docker container)"
           else
-            echo "INFO: /nix is not mounted (btrfs/loop devices may not be available in this environment)"
-            echo "INFO: This is expected in restricted Docker environments"
-            echo "INFO: nix-permission-edict input was set to true - would grant user ownership if /nix were mounted"
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
           fi
-
-          # The test passes as long as the action ran (even if btrfs isn't available)
-          echo "PASS: nix-permission-edict test completed"
-
-      - name: Show disk usage
-        if: steps.preflight.outputs.skip == 'false'
-        shell: bash
-        run: |
-          echo "=== Disk usage ==="
-          df -h
-          echo "=== /nix ownership ==="
-          ls -la / | grep nix || echo "No /nix directory"

@@ -1,4 +1,4 @@
-name: Test holster protocol (no purging)
+name: Test basic cleave protocol
 on:
   workflow_dispatch:
 jobs:
@@ -10,8 +10,9 @@ jobs:
         uses: .
         continue-on-error: true
         with:
-          hatchet-protocol: holster
+          hatchet-protocol: cleave
           witness-carnage: 'true'
+          root-safe-haven: '2048'
           mnt-safe-haven: '1024'
       - name: Assert action ran (succeeded or failed gracefully due to container limitations)
         env:
@@ -25,30 +26,28 @@ jobs:
               exit 1
             fi
             echo "PASS: /nix is mounted"
-            fstype=$(df -T /nix | tail -n 1 | awk '{print $2}')
-            echo "Filesystem type: $fstype"
-            if [ "$fstype" != "btrfs" ]; then
-              echo "FAIL: expected btrfs but got '$fstype'"
-              exit 1
-            fi
-            echo "PASS: /nix is btrfs"
-            if [ ! -d /nix/_temp ]; then
-              echo "FAIL: /nix/_temp directory does not exist"
-              exit 1
-            fi
-            echo "PASS: /nix/_temp exists"
+            echo "Checking TMPDIR..."
             if [ "$TMPDIR" != "/nix/_temp" ]; then
               echo "FAIL: expected TMPDIR=/nix/_temp but got '$TMPDIR'"
               exit 1
             fi
             echo "PASS: TMPDIR is /nix/_temp"
+            if [ ! -d /nix/_temp ]; then
+              echo "FAIL: /nix/_temp directory does not exist"
+              exit 1
+            fi
+            perms=$(stat -c '%a' /nix/_temp)
+            echo "Permissions of /nix/_temp: $perms"
+            if [ "$perms" != "1777" ]; then
+              echo "FAIL: expected permissions 1777 but got '$perms'"
+              exit 1
+            fi
+            echo "PASS: /nix/_temp exists with correct permissions"
             if [ ! -f "${HOME}/.expansion/holster_done" ]; then
               echo "FAIL: holster_done state file not found"
-              ls -la "${HOME}/.expansion/" 2>/dev/null || echo "(expansion dir missing)"
               exit 1
             fi
             echo "PASS: holster_done state file exists"
-            cat "${HOME}/.expansion/holster_done"
           elif [ "$OUTCOME" = "failure" ]; then
             echo "PASS: action failed gracefully (disk/mount operations not available in Docker container)"
           else
