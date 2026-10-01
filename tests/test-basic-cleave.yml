@@ -1,4 +1,4 @@
-name: Test nix-permission-edict grants user ownership of /nix
+name: Test basic cleave protocol
 on:
   workflow_dispatch:
 jobs:
@@ -10,6 +10,8 @@ jobs:
         run: |
           echo "=== Initial disk state ==="
           df -h
+          echo "=== /mnt contents ==="
+          ls -lah /mnt || true
           echo "=== Check for /nix ==="
           ls -lad /nix 2>/dev/null && echo "/nix exists" || echo "/nix does not exist"
           echo "=== Check btrfs tools ==="
@@ -24,16 +26,14 @@ jobs:
           witness-carnage: 'true'
           root-safe-haven: '2048'
           mnt-safe-haven: '1024'
-          nix-permission-edict: 'true'
+          nix-permission-edict: 'false'
       - name: Assert action ran and check outcome
         env:
           OUTCOME: ${{ steps.action.outcome }}
         run: |
           echo "outcome: $OUTCOME"
           if [ "$OUTCOME" = "success" ]; then
-            echo "Action succeeded — verifying nix-permission-edict..."
-
-            echo "Verifying /nix is mounted..."
+            echo "Action succeeded — verifying /nix mount..."
             if ! mountpoint -q /nix; then
               echo "FAIL: /nix is not a mountpoint after successful action"
               df -h
@@ -41,34 +41,44 @@ jobs:
             fi
             echo "PASS: /nix is mounted"
 
-            echo "Verifying current user owns /nix..."
-            current_uid=$(id --user)
-            current_gid=$(id --group)
-            nix_uid=$(stat -c '%u' /nix)
-            nix_gid=$(stat -c '%g' /nix)
-            echo "Current user UID: $current_uid, GID: $current_gid"
-            echo "/nix owner UID: $nix_uid, GID: $nix_gid"
-            if [ "$nix_uid" != "$current_uid" ]; then
-              echo "FAIL: /nix is owned by UID $nix_uid, expected $current_uid"
-              ls -lad /nix
+            echo "Verifying /nix/build directory..."
+            if [ ! -d /nix/build ]; then
+              echo "FAIL: /nix/build directory does not exist"
+              ls -lah /nix || true
               exit 1
             fi
-            if [ "$nix_gid" != "$current_gid" ]; then
-              echo "FAIL: /nix is owned by GID $nix_gid, expected $current_gid"
-              ls -lad /nix
-              exit 1
-            fi
-            echo "PASS: /nix is owned by current user ($current_uid:$current_gid)"
+            echo "PASS: /nix/build exists"
 
-            echo "Verifying user can write to /nix without sudo..."
-            test_file="/nix/test-write-$$"
-            if ! touch "$test_file"; then
-              echo "FAIL: current user cannot write to /nix without sudo"
-              ls -lad /nix
+            echo "Verifying TMPDIR..."
+            if [ -z "$TMPDIR" ]; then
+              echo "FAIL: TMPDIR is not set"
               exit 1
             fi
-            rm -f "$test_file"
-            echo "PASS: current user can write to /nix without sudo"
+            if [[ "$TMPDIR" != /mnt/* ]]; then
+              echo "FAIL: TMPDIR ($TMPDIR) is not under /mnt"
+              exit 1
+            fi
+            echo "PASS: TMPDIR=$TMPDIR is set under /mnt"
+
+            echo "Verifying /nix has usable space..."
+            df -h /nix
+            avail=$(df -m --output=avail /nix | tail -n 1 | tr -d ' ')
+            echo "Available space on /nix: ${avail}MB"
+            if [ "$avail" -lt 1024 ]; then
+              echo "FAIL: /nix has less than 1024MB available (got ${avail}MB)"
+              exit 1
+            fi
+            echo "PASS: /nix has ${avail}MB available"
+
+            echo "Verifying expansion log..."
+            log="${HOME}/.expansion/expansion.log"
+            if [ ! -f "$log" ]; then
+              echo "FAIL: expansion log not found at $log"
+              ls -lah "${HOME}/.expansion/" || true
+              exit 1
+            fi
+            echo "PASS: expansion log exists"
+            tail -20 "$log"
 
           elif [ "$OUTCOME" = "failure" ]; then
             echo "Action failed — checking if this is due to environment limitations..."

@@ -8,41 +8,36 @@
 
 **Test Policy SHA:** `843adf9e4b8f85d0c08b27b9d0b09dd094b54702`
 
-**Harden Agent Version:** `1`
+**Harden Agent Version:** `2`
 
-Action **wimpysworld--nothing-but-nix/v10** was hardened automatically. 8 finding(s) were identified and resolved across 1 iteration(s).
+Action **wimpysworld--nothing-but-nix/v10** was hardened automatically. 8 finding(s) were identified and resolved across 2 iteration(s).
 
 ## Findings Fixed
 
 ### script-injection (severity: high)
 
-Multiple `${{ ... }}` expressions are directly interpolated inside `run:` shell command strings in action.yml (sub-rule a). This allows an attacker who controls the calling workflow's inputs or context values to inject arbitrary shell commands.
-
-- "The Checks" step: `if [[ "${{ runner.os }}" == "macOS" ]]` (and two more occurrences for Windows/Linux checks). Any `${{ ... }}` in a run: block is a script-injection risk regardless of context.
-- "The Hatchet Protocol" step: `input_protocol="${{ inputs.hatchet-protocol }}"` — user-controlled input directly interpolated.
-- "The Volume" step: `min_required=$((${{ inputs.mnt-safe-haven }} + 1024))` and `if sudo fallocate -l $((free_space - ${{ inputs.mnt-safe-haven }}))M` and `if [[ "${{ inputs.nix-permission-edict }}" == "true" ]]` — user-controlled inputs directly interpolated.
-- "The Purge" step: `protocol_level="${{ steps.set-hatchet-protocol.outputs.level }}"`, `root_safe_haven="${{ inputs.root-safe-haven }}"`, and `if [ "${{ inputs.witness-carnage }}" == "true" ]` — step outputs and user-controlled inputs directly interpolated inside the run: block (even inside a heredoc, GitHub Actions interpolates expressions before the shell runs).
+Rule (a): Multiple ${{ }} expressions are directly interpolated inside run: shell blocks, allowing script injection. In the 'The Checks' step: `${{ runner.os }}` is used three times directly in shell conditionals. In 'The Hatchet Protocol': `input_protocol="${{ inputs.hatchet-protocol }}"` interpolates a user-controlled input directly into a shell variable assignment. In 'The Volume': `${{ inputs.mnt-safe-haven }}` is interpolated directly into arithmetic expressions and `${{ inputs.nix-permission-edict }}` into a conditional. In 'The Purge': `${{ steps.set-hatchet-protocol.outputs.level }}`, `${{ inputs.root-safe-haven }}`, and `${{ inputs.witness-carnage }}` are all interpolated directly into shell commands. Any of these values could contain shell metacharacters that execute arbitrary commands before the shell ever sees them.
 
 Locations:
 
-- `action.yml:35`
-- `action.yml:42`
-- `action.yml:50`
-- `action.yml:75`
-- `action.yml:103`
-- `action.yml:113`
-- `action.yml:124`
-- `action.yml:160`
-- `action.yml:162`
-- `action.yml:214`
+- `action.yml:34`
+- `action.yml:43`
+- `action.yml:52`
+- `action.yml:80`
+- `action.yml:119`
+- `action.yml:131`
+- `action.yml:148`
+- `action.yml:175`
+- `action.yml:177`
+- `action.yml:247`
 
 ### unpinned-uses (severity: high)
 
-The composite action step "The Post" references `srz-zumix/post-run-action@v3`, which uses a mutable version tag (`v3`) rather than a full 40-character immutable commit SHA. This means the action could be silently updated to a malicious version without any change to this file, creating a supply-chain attack vector.
+The composite action step 'The Post' uses `srz-zumix/post-run-action@v3`, which is pinned to a mutable tag (`@v3`) rather than an immutable 40-character commit SHA. This means the action could be silently updated or compromised without any change to this file, enabling a supply-chain attack.
 
 Locations:
 
-- `action.yml:220`
+- `action.yml:255`
 
 ### static-inline-injection (severity: high)
 
@@ -100,5 +95,13 @@ Locations:
 
 **Notes:**
 
-Fixed all script-injection findings by moving every ${{ ... }} expression from run: blocks into step-level env: blocks and referencing them as plain shell environment variables. Specifically: (1) 'The Checks' step: runner.os moved to RUNNER_OS env var; (2) 'The Hatchet Protocol' step: inputs.hatchet-protocol moved to INPUT_HATCHET_PROTOCOL env var; (3) 'The Volume' step: inputs.mnt-safe-haven and inputs.nix-permission-edict moved to INPUT_MNT_SAFE_HAVEN and INPUT_NIX_PERMISSION_EDICT env vars; (4) 'The Purge' step: steps.set-hatchet-protocol.outputs.level, inputs.root-safe-haven, and inputs.witness-carnage moved to INPUT_PROTOCOL_LEVEL, INPUT_ROOT_SAFE_HAVEN, and INPUT_WITNESS_CARNAGE env vars. Pinned srz-zumix/post-run-action@v3 to full SHA 42756f7452b9439d0365b7e087b2c364f54209c6 with # v3 comment.
+Fixed all script injection findings by moving ${{ }} expressions to env: blocks in each affected step: 'The Checks' (runner.os → RUNNER_OS), 'The Hatchet Protocol' (inputs.hatchet-protocol → INPUT_HATCHET_PROTOCOL), 'The Volume' (inputs.mnt-safe-haven → INPUT_MNT_SAFE_HAVEN, inputs.nix-permission-edict → INPUT_NIX_PERMISSION_EDICT), 'The Purge' (steps.set-hatchet-protocol.outputs.level → INPUT_PROTOCOL_LEVEL, inputs.root-safe-haven → INPUT_ROOT_SAFE_HAVEN, inputs.witness-carnage → INPUT_WITNESS_CARNAGE). The heredoc script in 'The Purge' inherits these env vars from the parent shell environment. Also pinned srz-zumix/post-run-action@v3 to its immutable SHA @42756f7452b9439d0365b7e087b2c364f54209c6.
+
+### Iteration 2
+
+**Fixes applied:** script-injection
+
+**Notes:**
+
+Fixed script injection in 'The Volume' step of action.yml at lines 116 and 127. Added integer validation (`[[ "$INPUT_MNT_SAFE_HAVEN" =~ ^[0-9]+$ ]]`) before using the value in bash arithmetic expressions. The validated value is stored in a local variable `mnt_safe_haven` and used with double-quoting in both `$((...))` contexts: `min_required=$(("$mnt_safe_haven" + 1024))` and `sudo fallocate -l $(("$free_space" - "$mnt_safe_haven"))M`. This prevents arithmetic injection attacks where a crafted input like `a[$(malicious_command)]` could cause arbitrary command execution in bash.
 

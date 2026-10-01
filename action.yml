@@ -140,8 +140,15 @@ runs:
         free_space=$(df -m --output=avail /mnt | tail -n 1 | tr -d ' ')
         echo "Initial free space of /mnt: ${free_space}MB"
 
+        # Validate INPUT_MNT_SAFE_HAVEN is a pure integer to prevent arithmetic injection
+        if ! [[ "$INPUT_MNT_SAFE_HAVEN" =~ ^[0-9]+$ ]]; then
+          echo "❌ Invalid mnt-safe-haven value: must be a non-negative integer"
+          exit 1
+        fi
+        mnt_safe_haven="$INPUT_MNT_SAFE_HAVEN"
+
         # Minimum usable space: safe haven + 1024MB for a useful initial volume
-        min_required=$(("$INPUT_MNT_SAFE_HAVEN" + 1024))
+        min_required=$(("$mnt_safe_haven" + 1024))
         if [ "${free_space}" -lt "${min_required}" ]; then
           echo "❌ Insufficient free space on /mnt to create initial volume."
           echo "   Available: ${free_space}MB, Required: at least ${min_required}MB"
@@ -155,7 +162,7 @@ runs:
         loop_dev=$(sudo losetup --find)
         loop_num=${loop_dev##*/loop}
 
-        if sudo fallocate -l $((free_space - "$INPUT_MNT_SAFE_HAVEN"))M "/mnt/disk${loop_num}.img"; then
+        if sudo fallocate -l $(("$free_space" - "$mnt_safe_haven"))M "/mnt/disk${loop_num}.img"; then
           sudo losetup ${loop_dev} "/mnt/disk${loop_num}.img"
         else
           echo "❌ Failed to allocate disk image on /mnt"

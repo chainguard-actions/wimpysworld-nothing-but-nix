@@ -1,4 +1,4 @@
-name: Test holster protocol (level 0 - no purge)
+name: Test holster protocol (no purging)
 on:
   workflow_dispatch:
 jobs:
@@ -6,56 +6,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Install btrfs-progs if missing
+      - name: Pre-check disk space
         run: |
-          if ! command -v mkfs.btrfs &>/dev/null; then
-            echo "Installing btrfs-progs..."
-            sudo apt-get update -qq && sudo apt-get install -y -qq btrfs-progs || true
-          fi
-          echo "mkfs.btrfs: $(which mkfs.btrfs 2>/dev/null || echo not found)"
-      - name: Pre-check environment
-        run: |
-          echo "OS: $(uname -s)"
-          echo "Distro: $(lsb_release -is 2>/dev/null || echo unknown)"
-          echo "GITHUB_ACTIONS: $GITHUB_ACTIONS"
-          echo "/nix exists: $(ls /nix 2>/dev/null && echo yes || echo no)"
-          echo "btrfs available: $(which mkfs.btrfs 2>/dev/null || echo no)"
-          echo "losetup available: $(which losetup 2>/dev/null || echo no)"
-          df -h /mnt 2>/dev/null || echo "/mnt not available"
+          echo "=== Initial disk state ==="
+          df -h
+          echo "=== Check for /nix ==="
+          ls -lad /nix 2>/dev/null && echo "/nix exists" || echo "/nix does not exist"
+          echo "=== Check btrfs tools ==="
+          which mkfs.btrfs 2>/dev/null && echo "mkfs.btrfs available" || echo "mkfs.btrfs NOT available"
+          echo "=== Check loop devices ==="
+          sudo losetup --find 2>/dev/null && echo "losetup works" || echo "losetup NOT available"
       - id: action
         uses: .
         continue-on-error: true
         with:
-          hatchet-protocol: 'holster'
+          hatchet-protocol: holster
           witness-carnage: 'true'
           root-safe-haven: '2048'
           mnt-safe-haven: '1024'
           nix-permission-edict: 'false'
-      - name: Assert action outcome
+      - name: Assert action ran and check outcome
         env:
-          ACTION_OUTCOME: ${{ steps.action.outcome }}
-          IS_SUPPORTED: ${{ steps.action.outputs.is_supported }}
+          OUTCOME: ${{ steps.action.outcome }}
         run: |
-          echo "action outcome: $ACTION_OUTCOME"
-          echo "is_supported: $IS_SUPPORTED"
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "Action succeeded — verifying holster protocol state..."
 
-          if [ "$IS_SUPPORTED" = "true" ] && [ "$ACTION_OUTCOME" = "success" ]; then
-            echo "Environment is supported - checking /nix mount"
+            echo "Verifying /nix is mounted..."
             if ! mountpoint -q /nix; then
-              echo "FAIL: /nix is not a mountpoint"
+              echo "FAIL: /nix is not a mountpoint after successful action"
               df -h
               exit 1
             fi
             echo "PASS: /nix is mounted"
-            df -h /nix
 
+            echo "Verifying /nix/build directory..."
             if [ ! -d /nix/build ]; then
               echo "FAIL: /nix/build directory does not exist"
+              ls -lah /nix || true
               exit 1
             fi
-            echo "PASS: /nix/build directory exists"
+            echo "PASS: /nix/build exists"
 
-            echo "TMPDIR: $TMPDIR"
+            echo "Verifying TMPDIR is set on /mnt..."
             if [ -z "$TMPDIR" ]; then
               echo "FAIL: TMPDIR is not set"
               exit 1
@@ -64,19 +58,41 @@ jobs:
               echo "FAIL: TMPDIR ($TMPDIR) is not under /mnt"
               exit 1
             fi
-            echo "PASS: TMPDIR is set to $TMPDIR (under /mnt)"
+            echo "PASS: TMPDIR=$TMPDIR is set under /mnt"
 
-            if [ ! -f "${HOME}/.expansion/holster_done" ]; then
-              echo "FAIL: holster_done state file not found"
-              ls -la "${HOME}/.expansion/" 2>/dev/null || echo "expansion dir missing"
+            echo "Verifying docker is still present (holster does not purge)..."
+            if ! command -v docker &>/dev/null; then
+              echo "FAIL: docker should still be present with holster protocol"
               exit 1
             fi
-            echo "PASS: holster_done state file exists"
-            cat "${HOME}/.expansion/holster_done"
-          elif [ "$IS_SUPPORTED" = "false" ]; then
-            echo "INFO: Environment not supported - action correctly skipped"
-            echo "PASS"
+            echo "PASS: docker is still present (holster protocol does not purge)"
+
+            echo "Verifying expansion state directory..."
+            if [ ! -d "${HOME}/.expansion" ]; then
+              echo "FAIL: expansion state directory not found"
+              exit 1
+            fi
+            echo "PASS: expansion state directory exists"
+            ls -lah "${HOME}/.expansion/"
+
+            echo "Verifying holster_done marker..."
+            marker="${HOME}/.expansion/holster_done"
+            if [ ! -f "$marker" ]; then
+              echo "FAIL: holster_done marker not found at $marker"
+              ls -lah "${HOME}/.expansion/" || true
+              exit 1
+            fi
+            echo "PASS: holster_done marker exists"
+            cat "$marker"
+
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "Action failed — checking if this is due to environment limitations..."
+            # In act's Docker environment, loop devices, btrfs, or sudo mount may not be available
+            # This is an expected failure mode under act
+            echo "PASS: action failed gracefully (likely due to act Docker environment limitations)"
+            echo "=== Expansion state (if any) ==="
+            ls -lah "${HOME}/.expansion/" 2>/dev/null || echo "No expansion state directory"
           else
-            echo "INFO: Action did not complete (likely missing system capabilities in act container)"
-            echo "PASS: Skipping filesystem assertions in restricted environment"
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
           fi
