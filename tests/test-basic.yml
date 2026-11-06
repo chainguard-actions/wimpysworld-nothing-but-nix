@@ -1,0 +1,53 @@
+name: Test basic usage (graceful skip without loop devices)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Ensure no loop device support (container runner)
+        run: |
+          sudo rm -f /dev/loop-control 2>/dev/null || rm -f /dev/loop-control 2>/dev/null || true
+          if [ -e /dev/loop-control ]; then
+            echo "FAIL: could not remove /dev/loop-control; scenario cannot be simulated"
+            exit 1
+          fi
+          if [ -d /nix ]; then
+            echo "FAIL: /nix already exists before the action"
+            exit 1
+          fi
+          echo "TMPDIR_BEFORE=${TMPDIR:-unset}" >> "$GITHUB_ENV"
+      - id: action
+        uses: .
+      - name: Assert action skipped gracefully
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          ROOT_FREE: ${{ steps.action.outputs.root-free-bytes }}
+          NIX_SIZE: ${{ steps.action.outputs.nix-size-bytes }}
+          NIX_AVAIL: ${{ steps.action.outputs.nix-avail-bytes }}
+          PURGE_SECONDS: ${{ steps.action.outputs.purge-seconds }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "root-free-bytes: '$ROOT_FREE' nix-size-bytes: '$NIX_SIZE' nix-avail-bytes: '$NIX_AVAIL' purge-seconds: '$PURGE_SECONDS'"
+          if [ "$OUTCOME" != "success" ]; then
+            echo "FAIL: expected success"
+            exit 1
+          fi
+          if [ -n "$ROOT_FREE$NIX_SIZE$NIX_AVAIL$PURGE_SECONDS" ]; then
+            echo "FAIL: expected all outputs empty when the runner is unsupported"
+            exit 1
+          fi
+          if [ -d /nix ]; then
+            echo "FAIL: /nix should not have been created"
+            exit 1
+          fi
+          if [ "${TMPDIR:-unset}" != "$TMPDIR_BEFORE" ]; then
+            echo "FAIL: TMPDIR changed from '$TMPDIR_BEFORE' to '${TMPDIR:-unset}'"
+            exit 1
+          fi
+          if [ ! -d /usr/local/bin ] || [ -e /usr/local.purge ]; then
+            echo "FAIL: /usr/local should be untouched"
+            exit 1
+          fi
+          echo "PASS"

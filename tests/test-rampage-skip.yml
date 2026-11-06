@@ -1,0 +1,49 @@
+name: Test rampage with unusual inputs skips on unsupported runner
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Ensure no loop device support (container runner)
+        run: |
+          sudo rm -f /dev/loop-control 2>/dev/null || rm -f /dev/loop-control 2>/dev/null || true
+          if [ -e /dev/loop-control ]; then
+            echo "FAIL: could not remove /dev/loop-control"
+            exit 1
+          fi
+      - id: action
+        uses: .
+        with:
+          hatchet-protocol: RAMPAGE
+          witness-carnage: 'true'
+          root-safe-haven: not-a-number
+          mnt-safe-haven: '2048'
+          nix-permission-edict: 'true'
+          btrfs-compression: bogus
+      - name: Assert action skipped without validating or purging
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          ROOT_FREE: ${{ steps.action.outputs.root-free-bytes }}
+          PURGE_SECONDS: ${{ steps.action.outputs.purge-seconds }}
+          NIX_SIZE: ${{ steps.action.outputs.nix-size-bytes }}
+        run: |
+          echo "outcome: $OUTCOME root-free-bytes: '$ROOT_FREE' purge-seconds: '$PURGE_SECONDS' nix-size-bytes: '$NIX_SIZE'"
+          if [ "$OUTCOME" != "success" ]; then
+            echo "FAIL: expected success"
+            exit 1
+          fi
+          if [ -n "$ROOT_FREE$PURGE_SECONDS$NIX_SIZE" ]; then
+            echo "FAIL: expected empty outputs"
+            exit 1
+          fi
+          if [ -d /nix ] || [ -e /usr/local.purge ] || [ -e /tmp/expand_nix_volume.sh ]; then
+            echo "FAIL: action should not have touched the filesystem"
+            exit 1
+          fi
+          if [ -e "$HOME/.expansion/protocol" ]; then
+            echo "FAIL: purge should not have started"
+            exit 1
+          fi
+          echo "PASS"
