@@ -1061,7 +1061,7 @@ runs:
     - name: The Post
       if: steps.environment-check.outputs.is_supported == 'true'
       # v3
-      uses: srz-zumix/post-run-action@42756f7452b9439d0365b7e087b2c364f54209c6
+      uses: chainguard-actions/srz-zumix-post-run-action@e28eae42848466c79510c1f38cca112f8484b445
       with:
         shell: bash -e {0}
         post-run: |
