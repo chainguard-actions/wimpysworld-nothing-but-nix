@@ -442,7 +442,7 @@ runs:
     - name: The Post
       if: runner.os == 'Linux'
       # v3
-      uses: chainguard-actions/srz-zumix-post-run-action@e28eae42848466c79510c1f38cca112f8484b445
+      uses: chainguard-actions/srz-zumix-post-run-action@b275a40595fbb9c88533bd11055600e66a06dc72
       with:
         shell: bash -e {0}
         post-run: |
