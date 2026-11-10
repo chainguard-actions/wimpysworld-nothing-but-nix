@@ -159,6 +159,15 @@ runs:
         INPUT_MNT_SAFE_HAVEN: ${{ inputs.mnt-safe-haven }}
         INPUT_NIX_PERMISSION_EDICT: ${{ inputs.nix-permission-edict }}
       run: |
+        if ! [[ "$INPUT_ROOT_SAFE_HAVEN" =~ ^[0-9]+$ ]]; then
+          echo "❌ root-safe-haven must be a non-negative integer (MB)"
+          exit 1
+        fi
+        if ! [[ "$INPUT_MNT_SAFE_HAVEN" =~ ^[0-9]+$ ]]; then
+          echo "❌ mnt-safe-haven must be a non-negative integer (MB)"
+          exit 1
+        fi
+
         free_space=$(df -m --output=avail /mnt | tail -n 1 | tr -d ' ')
         echo "Initial free space of /mnt: ${free_space}MB"
 
@@ -190,7 +199,7 @@ runs:
         loop_num=${loop_dev##*/loop}
 
         if sudo fallocate -l $((free_space - effective_safe_haven))M "/mnt/disk${loop_num}.img"; then
-          sudo losetup ${loop_dev} "/mnt/disk${loop_num}.img"
+          sudo losetup "${loop_dev}" "/mnt/disk${loop_num}.img"
         else
           echo "❌ Failed to allocate disk image on /mnt"
           exit 1
@@ -238,7 +247,7 @@ runs:
         NBN_PROTOCOL_LEVEL: ${{ steps.set-hatchet-protocol.outputs.level }}
         NBN_ROOT_SAFE_HAVEN: ${{ inputs.root-safe-haven }}
         NBN_MNT_SAFE_HAVEN: ${{ inputs.mnt-safe-haven }}
-        INPUT_WITNESS_CARNAGE: ${{ inputs.witness-carnage }}
+        NBN_WITNESS_CARNAGE: ${{ inputs.witness-carnage }}
       run: |
         cat > /tmp/expand_nix_volume.sh << 'EOF'
         #!/usr/bin/env bash
@@ -248,6 +257,19 @@ runs:
         expansion_dir="${HOME}/.expansion"
         root_safe_haven="${NBN_ROOT_SAFE_HAVEN}"
         mnt_safe_haven="${NBN_MNT_SAFE_HAVEN}"
+
+        if ! [[ "$root_safe_haven" =~ ^[0-9]+$ ]]; then
+          echo "❌ root-safe-haven must be a non-negative integer (MB)"
+          exit 1
+        fi
+        if ! [[ "$mnt_safe_haven" =~ ^[0-9]+$ ]]; then
+          echo "❌ mnt-safe-haven must be a non-negative integer (MB)"
+          exit 1
+        fi
+        if ! [[ "$protocol_level" =~ ^[0-9]+$ ]]; then
+          echo "❌ invalid protocol level"
+          exit 1
+        fi
 
         root_fs_dev=$(df -P / | awk 'NR==2 {print $1}')
         mnt_fs_dev=$(df -P /mnt | awk 'NR==2 {print $1}')
@@ -261,7 +283,7 @@ runs:
           echo "Free space of / after purge: ${free_space}MB"
 
           # Create additional disk if suitable free space exists
-          if [ $free_space -gt $((root_safe_haven + 2048)) ]; then
+          if [ "$free_space" -gt "$((root_safe_haven + 2048))" ]; then
             # Calculate the size of the expansion disk, reserving the safe haven
             disk_size=$((free_space - root_safe_haven))
             echo "Creating expansion disk of ${disk_size}MB in /"
@@ -269,11 +291,11 @@ runs:
             loop_dev=$(sudo losetup --find)
             loop_num=${loop_dev##*/loop}
             if sudo fallocate -l ${disk_size}M "/disk${loop_num}.img"; then
-              sudo losetup ${loop_dev} "/disk${loop_num}.img"
+              sudo losetup "${loop_dev}" "/disk${loop_num}.img"
 
               # Add the new device to the pool
-              sudo btrfs device add --nodiscard ${loop_dev} /nix
-              echo "Added expansion disk "/disk${loop_num}.img" (${loop_dev}, ${disk_size}MB) to /nix pool" > $expansion_dir/expansion_done
+              sudo btrfs device add --nodiscard "${loop_dev}" /nix
+              echo "Added expansion disk "/disk${loop_num}.img" (${loop_dev}, ${disk_size}MB) to /nix pool" > "$expansion_dir"/expansion_done
               sudo btrfs filesystem show
             fi
           fi
@@ -281,7 +303,7 @@ runs:
 
         # If carve is selected, claim space from / now
         if [[ "$protocol_level" -eq 1 ]]; then
-          echo "Disk space has been carved out" > $expansion_dir/carve_done
+          echo "Disk space has been carved out" > "$expansion_dir"/carve_done
           add_expansion_disk
         fi
 
@@ -293,7 +315,7 @@ runs:
           docker system prune --all --force
           sudo apt-get -y remove --purge '^docker.*'
           sudo rmz -f /usr/bin/docker* /var/lib/docker
-          echo "Cleanse docker complete" > $expansion_dir/docker_done
+          echo "Cleanse docker complete" > "$expansion_dir"/docker_done
         fi
 
         # Cleanse snap
@@ -305,7 +327,7 @@ runs:
             /var/snap \
             /var/lib/snapd \
             "${HOME}/snap"
-          echo "Cleanse snap complete" > $expansion_dir/snap_done
+          echo "Cleanse snap complete" > "$expansion_dir"/snap_done
         fi
 
         # Cleanse apt
@@ -373,7 +395,7 @@ runs:
 
           sudo apt-get -y autoremove --purge
           sudo apt-get -y clean
-          echo "Cleanse apt complete" > $expansion_dir/apt_done
+          echo "Cleanse apt complete" > "$expansion_dir"/apt_done
         fi
 
         # Cleave
@@ -390,7 +412,7 @@ runs:
             /opt/google \
             /opt/mssql-tools \
             /usr/local.purge
-          echo "Cleave complete" > $expansion_dir/cleave_done
+          echo "Cleave complete" > "$expansion_dir"/cleave_done
         fi
 
         # Rampage
@@ -417,26 +439,26 @@ runs:
             /var/lib/gems \
             /var/lib/mysql \
             /var/lib/ubuntu-advantage
-          echo "Rampage complete" > $expansion_dir/rampage_done
+          echo "Rampage complete" > "$expansion_dir"/rampage_done
         fi
 
         # Claim the space from / for purging
         if [[ "$protocol_level" -ge 2 ]]; then
-          echo "The Purge Is Complete!" > $expansion_dir/purge_done
+          echo "The Purge Is Complete!" > "$expansion_dir"/purge_done
           add_expansion_disk
         fi
 
-        echo "Everything completed" > $expansion_dir/all_done
+        echo "Everything completed" > "$expansion_dir"/all_done
         EOF
 
         # Make script executable
         chmod +x /tmp/expand_nix_volume.sh
         # Execute based on witness-carnage setting
-        if [ "$INPUT_WITNESS_CARNAGE" == "true" ]; then
+        if [ "$NBN_WITNESS_CARNAGE" == "true" ]; then
           echo "😮 Displaying the carnage in real-time. This will block until completion."
-          /tmp/expand_nix_volume.sh | tee ${HOME}/.expansion/expansion.log
+          /tmp/expand_nix_volume.sh | tee "${HOME}/.expansion/expansion.log"
         else
-          /tmp/expand_nix_volume.sh > ${HOME}/.expansion/expansion.log 2>&1 &
+          /tmp/expand_nix_volume.sh > "${HOME}/.expansion/expansion.log" 2>&1 &
           echo "📈 Background space expansion started. /nix will grow as space becomes available."
         fi
     - name: The Post
@@ -446,7 +468,7 @@ runs:
       with:
         shell: bash -e {0}
         post-run: |
-          ls -ltr ${HOME}/.expansion/*_done || true
+          ls -ltr "${HOME}/.expansion/"*_done || true
           all_disks=()
 
           # Check for disks in /mnt directory
