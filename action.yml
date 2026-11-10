@@ -316,6 +316,16 @@ runs:
         fi
         echo "Btrfs compression: ${compression}"
 
+        # Check mnt-safe-haven is a whole number before any arithmetic
+        if [[ ! "${MNT_SAFE_HAVEN}" =~ ^[0-9]+$ ]]; then
+          echo "::error::mnt-safe-haven '${MNT_SAFE_HAVEN}' is not valid. Use a whole number of MB."
+          exit 1
+        fi
+        if [[ ! "${ROOT_SAFE_HAVEN_RESOLVED}" =~ ^[0-9]+$ ]]; then
+          echo "::error::The resolved root safe haven '${ROOT_SAFE_HAVEN_RESOLVED}' is not a whole number of MB."
+          exit 1
+        fi
+
         free_space=$(df -m --output=avail /mnt | tail -n 1 | tr -d ' ')
         echo "Initial free space of /mnt: ${free_space}MB"
 
@@ -393,7 +403,7 @@ runs:
         sudo mkdir -p /nix/build
 
         if [[ "${NIX_PERMISSION_EDICT}" == "true" ]]; then
-          echo "Granting user ownership of /nix"
+          echo "Applying Nix Permission Edict: Granting user ownership of /nix"
           sudo chown -R "$(id --user)":"$(id --group)" /nix
         fi
 
@@ -446,6 +456,14 @@ runs:
         expansion_dir="${HOME}/.expansion"
         root_safe_haven="${ROOT_SAFE_HAVEN_RESOLVED}"
         mnt_safe_haven="${MNT_SAFE_HAVEN}"
+        if [[ ! "${mnt_safe_haven}" =~ ^[0-9]+$ ]]; then
+          echo "::error::mnt-safe-haven '${mnt_safe_haven}' is not valid. Use a whole number of MB."
+          exit 1
+        fi
+        if [[ ! "${root_safe_haven}" =~ ^[0-9]+$ ]]; then
+          echo "::error::The resolved root safe haven '${root_safe_haven}' is not a whole number of MB."
+          exit 1
+        fi
 
         root_fs_dev=$(df -P / | awk 'NR==2 {print $1}')
         mnt_fs_dev=$(df -P /mnt | awk 'NR==2 {print $1}')
